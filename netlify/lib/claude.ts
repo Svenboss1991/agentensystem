@@ -439,3 +439,27 @@ export function aboLesen(mail: IncomingMail, account: AccountRow, heute: string,
     frist,
   );
 }
+
+// ─── Finanz-Briefing ─────────────────────────────────────────────────────────
+
+export const Briefing = z.object({
+  titel: z.string().describe("eine Zeile, das Wichtigste des Tages"),
+  punkte: z.array(
+    z.object({
+      dringlichkeit: z.enum(["hoch", "mittel", "info"]),
+      text: z.string().describe("ein bis zwei Sätze"),
+    }),
+  ),
+});
+export type Briefing = z.infer<typeof Briefing>;
+
+export function briefingSchreiben(daten: string, frist: number): Promise<Briefing> {
+  return ask(
+    Briefing,
+    `Du schreibst Svens tägliches Anlage-Briefing auf Deutsch, knapp und sortiert nach Dringlichkeit: zuerst was heute oder in den nächsten Tagen ansteht (Limits nahe am Kurs, Ex-Tage, Quartalszahlen, starke Bewegungen, News mit Wirkung), dann Informationen.
+Keine Kauf- oder Verkaufsempfehlung als Auftrag; Sven entscheidet. Nutze nur die gelieferten Daten.`,
+    daten,
+    "low",
+    frist,
+  );
+}
