@@ -5,7 +5,7 @@ import { parseRaw, replySubject, type FetchResult, type IncomingMail, type MailP
 
 const API = "https://gmail.googleapis.com/gmail/v1/users/me";
 
-async function gmail<T>(account: AccountRow, path: string, init?: RequestInit): Promise<T> {
+export async function gmail<T>(account: AccountRow, path: string, init?: RequestInit): Promise<T> {
   const token = await accessToken(account);
   const res = await fetch(`${API}${path}`, {
     ...init,

@@ -66,3 +66,36 @@ export async function oauthStarten(accountId: string): Promise<string> {
   if (!res.ok || !body.url) throw new Error(body.fehler ?? `Verbinden fehlgeschlagen (${res.status})`);
   return body.url;
 }
+
+/** Ruft eine Netlify-Funktion mit Svens Anmeldung auf. */
+export async function funktion<T>(name: string, body: unknown): Promise<T> {
+  const { data } = await supabase.auth.getSession();
+  const res = await fetch(`/.netlify/functions/${name}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${data.session?.access_token}` },
+    body: JSON.stringify(body),
+  });
+  const antwort = (await res.json().catch(() => ({}))) as T & { fehler?: string };
+  if (!res.ok) throw new Error(antwort.fehler ?? `Fehler ${res.status}`);
+  return antwort;
+}
+
+export type Bereich = "privat" | "finanzen" | "behoerden" | "tamelo" | "don_sombrerito" | "clave_suiza";
+
+export const BEREICHE: { key: Bereich; label: string }[] = [
+  { key: "privat", label: "Privat" },
+  { key: "finanzen", label: "Finanzen" },
+  { key: "behoerden", label: "Behörden & Recht" },
+  { key: "tamelo", label: "Tamelo" },
+  { key: "don_sombrerito", label: "Don Sombrerito" },
+  { key: "clave_suiza", label: "Clave Suiza" },
+];
+
+export const bereichLabel = (b: Bereich | null | undefined) => BEREICHE.find((x) => x.key === b)?.label ?? "Privat";
+
+/** Bereich einer Mail ohne Akte: Finanzmails → Finanzen, Firmenmails → Firma, sonst Privat. */
+export function bereichVonMail(m: { kategorie: string | null; marke: Marke | null } | null | undefined): Bereich {
+  if (m?.kategorie === "finanz") return "finanzen";
+  if (m?.marke && m.marke !== "keine") return m.marke;
+  return "privat";
+}

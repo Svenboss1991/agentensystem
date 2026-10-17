@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { MAIL_FELDER, MailKopf, type Mail } from "./Mail";
-import { supabase, zeit, ZEITZONE } from "./lib/supabase";
+import BereichFilter from "./BereichFilter";
+import { BEREICHE, bereichLabel, supabase, zeit, ZEITZONE, type Bereich } from "./lib/supabase";
 import { Abschnitt, Karte, Knopf, Marker } from "./ui";
 
 interface Akte {
@@ -11,6 +12,7 @@ interface Akte {
   gegenpartei_adresse: string | null;
   worauf: string | null;
   status: "offen" | "erledigt" | "verworfen";
+  bereich: Bereich;
   am_zug: "gegenseite" | "sven";
   seit: string;
   wiedervorlage_am: string | null;
@@ -27,7 +29,7 @@ interface Eintrag {
 }
 
 const AKTE_FELDER =
-  "id, nummer, titel, gegenpartei, gegenpartei_adresse, worauf, status, am_zug, seit, wiedervorlage_am, zuletzt_aktiv, notiz";
+  "id, nummer, titel, gegenpartei, gegenpartei_adresse, worauf, status, bereich, am_zug, seit, wiedervorlage_am, zuletzt_aktiv, notiz";
 
 const heute = () => new Intl.DateTimeFormat("en-CA", { timeZone: ZEITZONE }).format(new Date());
 
@@ -71,6 +73,7 @@ function AkteZeile({ akte }: { akte: Akte }) {
         <span className="font-medium">{akte.titel}</span>
         {akte.gegenpartei && <span className="ml-2 text-sm text-stone-500">{akte.gegenpartei}</span>}
       </span>
+      <span className="ml-auto mr-2 text-xs text-stone-400">{bereichLabel(akte.bereich)}</span>
       <span className="text-xs">
         <StatusMarker akte={akte} />
       </span>
@@ -80,7 +83,7 @@ function AkteZeile({ akte }: { akte: Akte }) {
 
 // ─── Auf «Heute»: offene Akten ───────────────────────────────────────────────
 
-export function AktenUebersicht({ version }: { version: unknown }) {
+export function AktenUebersicht({ version, bereich }: { version: unknown; bereich: Bereich | null }) {
   const [akten, setAkten] = useState<Akte[]>([]);
 
   useEffect(() => {
@@ -93,17 +96,23 @@ export function AktenUebersicht({ version }: { version: unknown }) {
       .then(({ data }) => setAkten((data ?? []) as Akte[]));
   }, [version]);
 
+  const sichtbar = bereich ? akten.filter((a) => a.bereich === bereich) : akten;
+  const gruppen = BEREICHE.map((b) => ({ ...b, akten: sichtbar.filter((a) => a.bereich === b.key) })).filter(
+    (g) => g.akten.length,
+  );
+
   return (
-    <Abschnitt nummer="📁" titel="Offene Akten" anzahl={akten.length} leer="Keine offenen Akten.">
-      {akten.length > 0 && (
-        <Karte>
+    <Abschnitt nummer="📁" titel="Offene Akten" anzahl={sichtbar.length} leer="Keine offenen Akten.">
+      {gruppen.map((g) => (
+        <Karte key={g.key}>
+          {!bereich && <p className="mb-2 text-xs font-medium uppercase tracking-wide text-stone-400">{g.label}</p>}
           <div className="divide-y divide-stone-100">
-            {akten.map((a) => (
+            {g.akten.map((a) => (
               <AkteZeile key={a.id} akte={a} />
             ))}
           </div>
         </Karte>
-      )}
+      ))}
       <a href="#/akten" className="self-start text-sm underline">
         Alle Akten anzeigen
       </a>
@@ -113,7 +122,7 @@ export function AktenUebersicht({ version }: { version: unknown }) {
 
 // ─── Mail in Akte ablegen ────────────────────────────────────────────────────
 
-export function InAkteAblegen({ mail, fertig }: { mail: Mail; fertig: () => void }) {
+export function InAkteAblegen({ mail, bereich, fertig }: { mail: Mail; bereich: Bereich; fertig: () => void }) {
   const [offen, setOffen] = useState(false);
   const [akten, setAkten] = useState<Akte[]>([]);
 
@@ -142,6 +151,7 @@ export function InAkteAblegen({ mail, fertig }: { mail: Mail; fertig: () => void
         gegenpartei: mail.absender_name ?? mail.absender,
         gegenpartei_adresse: mail.absender,
         am_zug: "sven",
+        bereich,
         seit: mail.empfangen_am?.slice(0, 10) ?? heute(),
         message_id: mail.id,
         quelle: "sven",
@@ -184,6 +194,7 @@ export function AktenSeite() {
   const [filter, setFilter] = useState<"offen" | "erledigt" | "alle">("offen");
   const [suche, setSuche] = useState("");
   const [neu, setNeu] = useState(false);
+  const [bereich, setBereich] = useState<Bereich | null>(null);
 
   useEffect(() => {
     let q = supabase.from("akten").select(AKTE_FELDER).order("zuletzt_aktiv", { ascending: false });
@@ -192,12 +203,17 @@ export function AktenSeite() {
   }, [filter]);
 
   const s = suche.trim().toLowerCase();
-  const sichtbar = s
-    ? akten.filter((a) => [a.nummer, a.titel, a.gegenpartei, a.worauf].some((x) => x?.toLowerCase().includes(s)))
-    : akten;
+  const anzahl: Partial<Record<Bereich, number>> = {};
+  for (const a of akten) anzahl[a.bereich] = (anzahl[a.bereich] ?? 0) + 1;
+  const sichtbar = akten
+    .filter((a) => !bereich || a.bereich === bereich)
+    .filter((a) => !s || [a.nummer, a.titel, a.gegenpartei, a.worauf].some((x) => x?.toLowerCase().includes(s)));
 
   return (
     <Seite titel="Akten">
+      <div className="mb-3">
+        <BereichFilter wert={bereich} setWert={setBereich} anzahl={anzahl} />
+      </div>
       <div className="mb-4 flex flex-wrap items-center gap-2">
         {(["offen", "erledigt", "alle"] as const).map((f) => (
           <button
@@ -218,7 +234,7 @@ export function AktenSeite() {
           + Neue Akte
         </Knopf>
       </div>
-      {neu && <NeueAkte abbrechen={() => setNeu(false)} />}
+      {neu && <NeueAkte bereich={bereich ?? "privat"} abbrechen={() => setNeu(false)} />}
       <Karte>
         {sichtbar.length ? (
           <div className="divide-y divide-stone-100">
@@ -234,8 +250,9 @@ export function AktenSeite() {
   );
 }
 
-function NeueAkte({ abbrechen }: { abbrechen: () => void }) {
+function NeueAkte({ bereich: start, abbrechen }: { bereich: Bereich; abbrechen: () => void }) {
   const [titel, setTitel] = useState("");
+  const [bereich, setBereich] = useState<Bereich>(start);
   const [gegenpartei, setGegenpartei] = useState("");
   const [worauf, setWorauf] = useState("");
   const [seit, setSeit] = useState(heute());
@@ -252,6 +269,7 @@ function NeueAkte({ abbrechen }: { abbrechen: () => void }) {
         seit,
         wiedervorlage_am: wiedervorlage || null,
         am_zug: "gegenseite",
+        bereich,
         quelle: "sven",
       })
       .select("id")
@@ -265,8 +283,9 @@ function NeueAkte({ abbrechen }: { abbrechen: () => void }) {
       <Karte>
         <form onSubmit={speichern} className="grid gap-2 sm:grid-cols-2">
           <input required value={titel} onChange={(e) => setTitel(e.target.value)} placeholder="Titel, z. B. Datenauskunft Aeroméxico" className={`${feld} sm:col-span-2`} />
+          <BereichWahl wert={bereich} setWert={setBereich} />
           <input value={gegenpartei} onChange={(e) => setGegenpartei(e.target.value)} placeholder="Gegenpartei (Firma/Person)" className={feld} />
-          <input value={worauf} onChange={(e) => setWorauf(e.target.value)} placeholder="Worum geht es / was erwarte ich?" className={feld} />
+          <input value={worauf} onChange={(e) => setWorauf(e.target.value)} placeholder="Worum geht es / was erwarte ich?" className={`${feld} sm:col-span-2`} />
           <label className="text-xs text-stone-500">
             Seit
             <input type="date" value={seit} onChange={(e) => setSeit(e.target.value)} className={`${feld} mt-1 w-full`} />
@@ -295,6 +314,17 @@ export function AkteSeite({ id }: { id: string }) {
   const [akte, setAkte] = useState<Akte | null>(null);
   const [verlauf, setVerlauf] = useState<Verlauf[]>([]);
   const [notiz, setNotiz] = useState("");
+  const [andere, setAndere] = useState<Akte[]>([]);
+
+  useEffect(() => {
+    supabase
+      .from("akten")
+      .select(AKTE_FELDER)
+      .eq("status", "offen")
+      .neq("id", id)
+      .order("zuletzt_aktiv", { ascending: false })
+      .then(({ data }) => setAndere((data ?? []) as Akte[]));
+  }, [id]);
 
   const laden = useCallback(async () => {
     const [a, m, e] = await Promise.all([
@@ -334,6 +364,21 @@ export function AkteSeite({ id }: { id: string }) {
     await laden();
   }
 
+  async function zusammenfuehren(zielId: string) {
+    const ziel = andere.find((a) => a.id === zielId);
+    if (!ziel || !akte) return;
+    if (!window.confirm(`${akte.nummer} in ${ziel.nummer} «${ziel.titel}» zusammenführen? Alle Mails und Notizen wandern dorthin.`)) return;
+    const { error } = await supabase.rpc("akten_zusammenfuehren", { quell_akte: id, ziel_akte: zielId });
+    if (error) return window.alert(error.message);
+    zurAkte(zielId);
+  }
+
+  async function mailUmbuchen(mailId: string, zielId: string) {
+    await supabase.from("messages").update({ akte_id: zielId === "keine" ? null : zielId }).eq("id", mailId);
+    if (zielId !== "keine") await supabase.from("akten").update({ zuletzt_aktiv: new Date().toISOString() }).eq("id", zielId);
+    await laden();
+  }
+
   if (!akte) return <Seite titel="Akte">Lädt …</Seite>;
   const h = heute();
   const basis = akte.wiedervorlage_am && akte.wiedervorlage_am > h ? akte.wiedervorlage_am : h;
@@ -359,6 +404,20 @@ export function AkteSeite({ id }: { id: string }) {
               <dd>{akte.worauf}</dd>
             </>
           )}
+          <dt className="text-stone-500">Bereich</dt>
+          <dd>
+            <select
+              value={akte.bereich}
+              onChange={(e) => aendern({ bereich: e.target.value as Bereich }, `Bereich auf ${bereichLabel(e.target.value as Bereich)} geändert`)}
+              className="rounded border border-stone-300 px-2 py-0.5 text-sm"
+            >
+              {BEREICHE.map((b) => (
+                <option key={b.key} value={b.key}>
+                  {b.label}
+                </option>
+              ))}
+            </select>
+          </dd>
           <dt className="text-stone-500">Seit</dt>
           <dd>{datumKurz(akte.seit)}</dd>
           <dt className="text-stone-500">Stand</dt>
@@ -401,6 +460,26 @@ export function AkteSeite({ id }: { id: string }) {
             <Knopf onClick={() => aendern({ status: "offen", erledigt_am: null }, "Wieder eröffnet")}>Wieder eröffnen</Knopf>
           </div>
         )}
+        {akte.status === "offen" && andere.length > 0 && (
+          <div className="mt-4 border-t border-stone-100 pt-3 text-sm">
+            <label className="flex flex-wrap items-center gap-2 text-stone-500">
+              Gleiche Sache wie
+              <select
+                value=""
+                onChange={(e) => e.target.value && zusammenfuehren(e.target.value)}
+                className="rounded border border-stone-300 px-2 py-1 text-sm text-stone-800"
+              >
+                <option value="">andere Akte wählen …</option>
+                {andere.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.nummer} {a.titel}
+                  </option>
+                ))}
+              </select>
+              → zusammenführen
+            </label>
+          </div>
+        )}
       </Karte>
 
       <h2 className="mb-3 mt-8 text-lg font-semibold">Verlauf</h2>
@@ -421,6 +500,22 @@ export function AkteSeite({ id }: { id: string }) {
           v.mail ? (
             <Karte key={v.mail.id}>
               <MailKopf mail={v.mail} />
+              <label className="mt-2 flex items-center gap-2 text-xs text-stone-500">
+                Umbuchen nach
+                <select
+                  value=""
+                  onChange={(e) => e.target.value && mailUmbuchen(v.mail!.id, e.target.value)}
+                  className="rounded border border-stone-300 px-1.5 py-0.5"
+                >
+                  <option value="">…</option>
+                  {andere.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.nummer} {a.titel}
+                    </option>
+                  ))}
+                  <option value="keine">aus Akte entfernen</option>
+                </select>
+              </label>
             </Karte>
           ) : (
             <div key={v.eintrag!.id} className={`rounded-lg px-4 py-2 text-sm ${v.eintrag!.typ === "notiz" ? "border border-amber-200 bg-amber-50" : "text-stone-500"}`}>
@@ -444,5 +539,22 @@ function Seite({ titel, children }: { titel: string; children: React.ReactNode }
       <h1 className="mb-6 mt-2 text-3xl font-semibold">{titel}</h1>
       {children}
     </main>
+  );
+}
+
+function BereichWahl({ wert, setWert }: { wert: Bereich; setWert: (b: Bereich) => void }) {
+  return (
+    <select
+      value={wert}
+      onChange={(e) => setWert(e.target.value as Bereich)}
+      className="rounded border border-stone-300 px-3 py-2 text-sm"
+      aria-label="Bereich"
+    >
+      {BEREICHE.map((b) => (
+        <option key={b.key} value={b.key}>
+          {b.label}
+        </option>
+      ))}
+    </select>
   );
 }

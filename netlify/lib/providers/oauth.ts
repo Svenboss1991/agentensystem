@@ -8,7 +8,7 @@ export const OAUTH = {
   google: {
     authUrl: "https://accounts.google.com/o/oauth2/v2/auth",
     tokenUrl: "https://oauth2.googleapis.com/token",
-    scope: "openid email https://www.googleapis.com/auth/gmail.modify",
+    scope: "https://www.googleapis.com/auth/gmail.modify",
     extra: { access_type: "offline", prompt: "consent" } as Record<string, string>,
     clientId: () => env("GOOGLE_CLIENT_ID"),
     clientSecret: () => env("GOOGLE_CLIENT_SECRET"),

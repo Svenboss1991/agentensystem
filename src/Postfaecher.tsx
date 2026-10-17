@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import type { Postfach } from "./Heute";
 import { MARKEN, oauthStarten, zeit } from "./lib/supabase";
+import Aufraeumen from "./Aufraeumen";
 import { Abschnitt, Karte, Knopf } from "./ui";
 
 /** Status aller Postfächer; Gmail/Hotmail lassen sich hier verbinden. */
 export default function Postfaecher({ postfaecher }: { postfaecher: Postfach[] }) {
   const [meldung, setMeldung] = useState<{ ok: boolean; text: string } | null>(null);
   const [verbindet, setVerbindet] = useState<string | null>(null);
+  const [aufraeumen, setAufraeumen] = useState<string | null>(null);
 
   // Rückmeldung nach der Anmeldung bei Google/Microsoft (…/?verbunden=… oder ?oauth_fehler=…)
   useEffect(() => {
@@ -54,6 +56,14 @@ export default function Postfaecher({ postfaecher }: { postfaecher: Postfach[] }
                   <Knopf onClick={() => verbinden(p)} primaer disabled={verbindet === p.id}>
                     {verbindet === p.id ? "Öffnet …" : "Verbinden"}
                   </Knopf>
+                )}
+                {(p.provider === "gmail" || p.provider === "hotmail") && p.aktiv && aufraeumen !== p.id && (
+                  <Knopf onClick={() => setAufraeumen(p.id)}>Aufräumen</Knopf>
+                )}
+                {(p.provider === "gmail" || p.provider === "hotmail") && p.aktiv && aufraeumen === p.id && (
+                  <div className="w-full">
+                    <Aufraeumen anbieter={p.provider} schliessen={() => setAufraeumen(null)} />
+                  </div>
                 )}
               </li>
             );

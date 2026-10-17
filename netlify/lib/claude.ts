@@ -74,6 +74,11 @@ const NeueAkte = z
   .object({
     titel: z.string().describe("kurz und eindeutig, z. B. «Datenauskunft Aeroméxico», «Reklamation Lieferung Restaurant Luna»"),
     gegenpartei: z.string().describe("Firma oder Person"),
+    bereich: z
+      .enum(["privat", "finanzen", "behoerden", "tamelo", "don_sombrerito", "clave_suiza"])
+      .describe(
+        "Ablage: finanzen = Bank, Broker, Steuer, Versicherung, Rechnungen; behoerden = Ämter, Recht, Verträge, Datenschutz-Anfragen an Firmen gehören zu privat; Firmen-Sachen in die Firma; sonst privat",
+      ),
     am_zug: z.enum(["gegenseite", "sven"]).describe("gegenseite = Sven wartet; sven = Sven muss etwas tun"),
     wiedervorlage_am: z.string().nullable().describe("YYYY-MM-DD, nur wenn am_zug = gegenseite"),
   })

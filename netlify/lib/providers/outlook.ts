@@ -4,7 +4,7 @@ import { parseRaw, type FetchResult, type IncomingMail, type MailProvider } from
 
 const API = "https://graph.microsoft.com/v1.0/me";
 
-async function graph(account: AccountRow, path: string, init?: RequestInit): Promise<Response> {
+export async function graph(account: AccountRow, path: string, init?: RequestInit): Promise<Response> {
   const token = await accessToken(account);
   const res = await fetch(`${API}${path}`, {
     ...init,

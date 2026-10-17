@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
-import { entwurfSenden, mailsAbrufen, MARKEN, supabase, tagesbeginn, zeit, type Marke } from "./lib/supabase";
+import BereichFilter from "./BereichFilter";
+import {
+  bereichVonMail,
+  entwurfSenden,
+  mailsAbrufen,
+  supabase,
+  tagesbeginn,
+  zeit,
+  type Bereich,
+  type Marke,
+} from "./lib/supabase";
 import { AkteLink, AktenUebersicht, InAkteAblegen } from "./Akten";
 import { MAIL_FELDER, MailKopf, type Mail } from "./Mail";
 import Postfaecher from "./Postfaecher";
@@ -8,7 +18,8 @@ import { Abschnitt, Karte, Knopf, Marker } from "./ui";
 interface Task {
   id: string;
   akte_id: string | null;
-  akten: { nummer: string } | null;
+  akten: { nummer: string; bereich: Bereich } | null;
+  messages: { kategorie: string | null; marke: Marke | null } | null;
   titel: string;
   grund: string | null;
   quelle: string;
@@ -55,6 +66,7 @@ export default function Heute() {
   const [laden, setLaden] = useState(true);
   const [abruf, setAbruf] = useState<{ laeuft: boolean; meldung: string }>({ laeuft: false, meldung: "" });
   const [stand, setStand] = useState<Date | null>(null);
+  const [bereich, setBereich] = useState<Bereich | null>(null);
 
   const neuLaden = useCallback(async () => {
     const gestern = tagesbeginn(1).toISOString();
@@ -62,7 +74,7 @@ export default function Heute() {
     const [t, d, m, f, p, eingang, gesendet] = await Promise.all([
       supabase
         .from("tasks")
-        .select("id, titel, grund, quelle, faellig_am, erstellt_am, akte_id, akten(nummer)")
+        .select("id, titel, grund, quelle, faellig_am, erstellt_am, akte_id, akten(nummer, bereich), messages(kategorie, marke)")
         .eq("status", "offen")
         .eq("nur_wenn_sven_handeln_muss", true)
         .order("faellig_am", { ascending: true, nullsFirst: false })
@@ -148,6 +160,10 @@ export default function Heute() {
 
   const datum = new Intl.DateTimeFormat("de-CH", { timeZone: "America/Bahia_Banderas", dateStyle: "full" }).format(new Date());
   const postfachProbleme = postfaecher.filter((p) => p.aktiv && p.sync_fehler);
+  const imBereich = (b: Bereich) => !bereich || b === bereich;
+  const tasksSichtbar = tasks.filter((t) => imBereich(t.akten?.bereich ?? bereichVonMail(t.messages)));
+  const draftsSichtbar = drafts.filter((d) => imBereich(bereichVonMail(d.messages)));
+  const lesenSichtbar = fuerSven.filter((m) => imBereich(bereichVonMail(m)));
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-8">
@@ -175,12 +191,16 @@ export default function Heute() {
         </div>
       </header>
 
+      <div className="mb-8">
+        <BereichFilter wert={bereich} setWert={setBereich} />
+      </div>
+
       {laden ? (
         <p className="text-stone-500">Lädt …</p>
       ) : (
         <div className="flex flex-col gap-10">
-          <Abschnitt nummer="①" titel="Muss ich selbst handeln?" anzahl={tasks.length} leer="Nichts. Alles läuft.">
-            {tasks.map((t) => (
+          <Abschnitt nummer="①" titel="Muss ich selbst handeln?" anzahl={tasksSichtbar.length} leer="Nichts. Alles läuft.">
+            {tasksSichtbar.map((t) => (
               <Karte key={t.id}>
                 <div className="flex items-start justify-between gap-4">
                   <div>
@@ -203,8 +223,8 @@ export default function Heute() {
             ))}
           </Abschnitt>
 
-          <Abschnitt nummer="②" titel="Entwürfe zur Freigabe" anzahl={drafts.length} leer="Keine offenen Entwürfe.">
-            {drafts.map((d) => (
+          <Abschnitt nummer="②" titel="Entwürfe zur Freigabe" anzahl={draftsSichtbar.length} leer="Keine offenen Entwürfe.">
+            {draftsSichtbar.map((d) => (
               <EntwurfKarte key={d.id} draft={d} fertig={() => setDrafts((ds) => ds.filter((x) => x.id !== d.id))} />
             ))}
           </Abschnitt>
@@ -227,15 +247,15 @@ export default function Heute() {
             </Karte>
           </Abschnitt>
 
-          <AktenUebersicht version={stand} />
+          <AktenUebersicht version={stand} bereich={bereich} />
 
           <Abschnitt
             nummer="✉"
             titel="Zum Lesen (privat, geschäftlich, unklar)"
-            anzahl={fuerSven.length}
+            anzahl={lesenSichtbar.length}
             leer="Nichts Neues."
           >
-            {fuerSven.map((m) => (
+            {lesenSichtbar.map((m) => (
               <Karte key={m.id}>
                 <MailKopf mail={m} />
                 <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -243,7 +263,7 @@ export default function Heute() {
                   {m.akte_id ? (
                     <span className="text-xs text-stone-500">in Akte abgelegt</span>
                   ) : (
-                    <InAkteAblegen mail={m} fertig={neuLaden} />
+                    <InAkteAblegen mail={m} bereich={bereichVonMail(m)} fertig={neuLaden} />
                   )}
                 </div>
               </Karte>

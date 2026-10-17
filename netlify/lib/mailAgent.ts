@@ -187,6 +187,7 @@ async function akteNachfuehren(
         seit: row.empfangen_am?.slice(0, 10) ?? heute(),
         message_id: row.id,
         marke,
+        bereich: n.bereich,
       })
       .select("id, nummer")
       .single();
