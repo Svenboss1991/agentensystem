@@ -46,7 +46,7 @@ export const istWoche = (kategorie: string) => kategorie.endsWith("_woche");
 const G_SCHUTZ = "-is:starred -is:important";
 const G_KAT: Record<string, { titel: string; q: string }> = {
   werbung: { titel: "Werbung (Tab «Werbung»)", q: `category:promotions ${G_SCHUTZ}` },
-  allgemein: { titel: "Posteingang «Allgemein», älter als 1 Jahr", q: `category:primary older_than:1y ${G_SCHUTZ}` },
+  allgemein: { titel: "Posteingang «Allgemein»", q: `category:primary ${G_SCHUTZ}` },
   sozial: { titel: "Soziale Netzwerke", q: `category:social ${G_SCHUTZ}` },
   foren: { titel: "Foren und Mailinglisten", q: `category:forums ${G_SCHUTZ}` },
   updates: { titel: "Benachrichtigungen (Tab «Updates»), älter als 1 Jahr", q: `category:updates older_than:1y ${G_SCHUTZ}` },
@@ -152,9 +152,9 @@ const H_KAT: Record<string, { titel: string; ordner: string; filter: () => strin
     filter: () => `inferenceClassification eq 'other' and ${H_SCHUTZ}`,
   },
   relevant: {
-    titel: "Posteingang «Relevant», älter als 1 Jahr",
+    titel: "Posteingang «Relevant»",
     ordner: "inbox",
-    filter: () => `inferenceClassification eq 'focused' and receivedDateTime lt ${vorTagen(365).toISOString()} and ${H_SCHUTZ}`,
+    filter: () => `inferenceClassification eq 'focused' and ${H_SCHUTZ}`,
   },
   alt_anhaenge: {
     titel: "Mails mit Anhang, älter als 2 Jahre",
@@ -266,7 +266,7 @@ async function ordnerMit(c: ImapFlow, specialUse: string, muster: RegExp): Promi
 }
 
 const I_KAT: Record<string, { titel: string; ordner: (c: ImapFlow) => Promise<string | undefined>; suche: () => Record<string, unknown> }> = {
-  alt: { titel: "Posteingang, älter als 1 Jahr", ordner: async () => "INBOX", suche: () => ({ before: vorTagen(365), flagged: false }) },
+  alt: { titel: "Posteingang", ordner: async () => "INBOX", suche: () => ({ flagged: false }) },
   spam: { titel: "Spam / Junk", ordner: (c) => ordnerMit(c, "\\Junk", /(^|\.)(spam|junk)$/i), suche: () => ({ all: true }) },
   spam_woche: {
     titel: "Spam der letzten Woche",
@@ -454,7 +454,7 @@ export async function aufraeumSchritt(
   kategorie: string,
   start: number,
   von: "mail" | "sven",
-): Promise<{ verschoben: number; unsicher: number; geprueft: number; kategorieFertig: boolean }> {
+): Promise<{ verschoben: number; muell: number; behalten: number; unsicher: number; geprueft: number; kategorieFertig: boolean }> {
   const { data: stand } = await db()
     .from("aufraeum_stand")
     .select("cursor, gepruefte_mails")
@@ -478,7 +478,7 @@ export async function aufraeumSchritt(
   const seiteFertig = r.weitere === 0 && v.rest.length === 0;
   const kategorieFertig = seiteFertig && r.naechster === null;
   const jetzt = new Date().toISOString();
-  await db()
+  const { error: standFehler } = await db()
     .from("aufraeum_stand")
     .upsert({
       account_id: account.id,
@@ -489,8 +489,11 @@ export async function aufraeumSchritt(
       gepruefte_mails: kategorieFertig ? 0 : (stand?.gepruefte_mails ?? 0) + (seiteFertig ? r.geprueft : 0),
       ...(kategorieFertig ? { durchgang_fertig_am: jetzt } : {}),
     });
+  if (standFehler) throw new Error(`Stand speichern: ${standFehler.message}`);
   return {
     verschoben: v.verschoben,
+    muell: r.bewertet.filter((b) => b.urteil === "muell").length,
+    behalten: r.bewertet.filter((b) => b.urteil === "behalten").length,
     unsicher: r.bewertet.filter((b) => b.urteil === "unsicher").length,
     geprueft: (stand?.gepruefte_mails ?? 0) + r.geprueft,
     kategorieFertig,

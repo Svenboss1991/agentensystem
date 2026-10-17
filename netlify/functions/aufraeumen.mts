@@ -37,6 +37,8 @@ export default async (req: Request) => {
       return json(200, {
         titel: aufraeumerFuer(account).kategorien[key],
         verschoben: r.verschoben,
+        muell: r.muell,
+        behalten: r.behalten,
         unsicher: r.unsicher,
         geprueft: r.geprueft,
         weiter: !r.kategorieFertig ? index : index + 1 < kategorien.length ? index + 1 : null,

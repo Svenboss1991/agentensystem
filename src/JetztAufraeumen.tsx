@@ -6,6 +6,8 @@ interface Schritt {
   titel?: string;
   geprueft?: number;
   verschoben: number;
+  muell?: number;
+  behalten?: number;
   unsicher: number;
   weiter: number | null;
 }
@@ -20,12 +22,18 @@ export default function JetztAufraeumen({ accountId, fertig }: { accountId: stri
     let index: number | null = 0;
     let verschoben = 0;
     let unsicher = 0;
+    let muell = 0;
+    let behalten = 0;
+    let geprueft = 0;
     let fehlversuche = 0;
     while (index !== null) {
       try {
         const r: Schritt = await funktion<Schritt>("aufraeumen", { aktion: "schritt", account_id: accountId, index });
         verschoben += r.verschoben;
         unsicher += r.unsicher;
+        muell += r.muell ?? 0;
+        behalten += r.behalten ?? 0;
+        if (r.weiter !== index) geprueft += r.geprueft ?? 0; // Kategorie fertig: ihre Zahl übernehmen
         index = r.weiter;
         fehlversuche = 0;
         setMeldung(
@@ -46,8 +54,9 @@ export default function JetztAufraeumen({ accountId, fertig }: { accountId: stri
       await new Promise((r) => setTimeout(r, 2_000));
     }
     setMeldung(
-      `Fertig: ${verschoben.toLocaleString("de-CH")} Mails in den Papierkorb.` +
-        (unsicher ? ` ${unsicher} Absender unsicher, siehe «Aufräumen: Agent ist unsicher» oben.` : ""),
+      `Fertig: ${geprueft.toLocaleString("de-CH")} Mails geprüft, ${verschoben.toLocaleString("de-CH")} in den Papierkorb. ` +
+        `Neu beurteilte Absender: ${muell} Müll, ${behalten} behalten, ${unsicher} unsicher` +
+        (unsicher ? " (siehe «Aufräumen: Agent ist unsicher» oben)." : "."),
     );
     setLaeuft(false);
     fertig();
