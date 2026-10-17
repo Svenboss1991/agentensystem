@@ -19,11 +19,28 @@ function imapClient(account: AccountRow): ImapFlow {
   });
 }
 
+/** imapflow meldet oft nur «Command failed»; die Antwort des Servers steht in Zusatzfeldern. */
+function klarerFehler(err: unknown): Error {
+  if (!(err instanceof Error)) return new Error(String(err));
+  const e = err as Error & { authenticationFailed?: boolean; responseText?: string; serverResponseCode?: string };
+  if (e.authenticationFailed) {
+    return new Error(`Anmeldung abgelehnt (Benutzername oder Passwort falsch)${e.responseText ? `: ${e.responseText}` : ""}`);
+  }
+  const details = [e.serverResponseCode, e.responseText].filter(Boolean).join(" ");
+  return details ? new Error(`${e.message}: ${details}`) : e;
+}
+
 async function withImap<T>(account: AccountRow, fn: (c: ImapFlow) => Promise<T>): Promise<T> {
   const client = imapClient(account);
-  await client.connect();
+  try {
+    await client.connect();
+  } catch (err) {
+    throw klarerFehler(err);
+  }
   try {
     return await fn(client);
+  } catch (err) {
+    throw klarerFehler(err);
   } finally {
     await client.logout().catch(() => client.close());
   }
