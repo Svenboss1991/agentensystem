@@ -32,7 +32,7 @@ interface Dokument {
   firmen: { id: string; name: string } | null;
   kontakte: { id: string; name: string | null; email: string | null } | null;
   akten: { id: string; nummer: string } | null;
-  analyse: Analyse | null;
+  auswertung: Analyse | null;
   analyse_status: "laeuft" | "fertig" | "fehler" | null;
   analyse_fehler: string | null;
 }
@@ -56,7 +56,7 @@ interface Analyse {
 }
 
 const FELDER =
-  "id, titel, typ, bereich, datei_pfad, datei_name, groesse, gueltig_bis, erinnern_am, notiz, erstellt_am, analyse, analyse_status, analyse_fehler, firmen(id, name), kontakte(id, name, email), akten(id, nummer)";
+  "id, titel, typ, bereich, datei_pfad, datei_name, groesse, gueltig_bis, erinnern_am, notiz, erstellt_am, auswertung, analyse_status, analyse_fehler, firmen(id, name), kontakte(id, name, email), akten(id, nummer)";
 
 const praemieText = (p: Analyse["praemie"]) =>
   p?.betrag != null ? `${p.waehrung ?? ""} ${p.betrag.toLocaleString("de-CH", { minimumFractionDigits: 2 })} ${p.intervall ?? ""}`.trim() : null;
@@ -245,9 +245,9 @@ export function DokumenteListe({
                 {d.analyse_status === "fehler" && d.analyse_fehler && (
                   <p className="w-full text-xs text-red-700">{d.analyse_fehler}</p>
                 )}
-                {offen === d.id && d.analyse && (
+                {offen === d.id && d.auswertung && (
                   <div className="w-full">
-                    <AnalyseAnsicht a={d.analyse} />
+                    <AnalyseAnsicht a={d.auswertung} />
                   </div>
                 )}
               </div>
@@ -450,10 +450,10 @@ function Versicherungen() {
           <tbody>
             {policen.map((d) => (
               <tr key={d.id} className="border-t border-stone-100">
-                <td className="py-1.5 pr-2">{d.analyse?.art ?? d.titel}</td>
-                <td className="py-1.5 pr-2">{d.analyse?.anbieter ?? d.firmen?.name ?? ""}</td>
-                <td className="py-1.5 pr-2 text-right tabular-nums">{praemieText(d.analyse?.praemie ?? null) ?? ""}</td>
-                <td className="py-1.5 text-right">{d.analyse?.kuendbar_bis ? datumKurz(d.analyse.kuendbar_bis) : ""}</td>
+                <td className="py-1.5 pr-2">{d.auswertung?.art ?? d.titel}</td>
+                <td className="py-1.5 pr-2">{d.auswertung?.anbieter ?? d.firmen?.name ?? ""}</td>
+                <td className="py-1.5 pr-2 text-right tabular-nums">{praemieText(d.auswertung?.praemie ?? null) ?? ""}</td>
+                <td className="py-1.5 text-right">{d.auswertung?.kuendbar_bis ? datumKurz(d.auswertung.kuendbar_bis) : ""}</td>
               </tr>
             ))}
           </tbody>

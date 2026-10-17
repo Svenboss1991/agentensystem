@@ -82,7 +82,7 @@ export default async (req: Request) => {
     if (!dok.erinnern_am && istDatum(analyse.kuendbar_bis)) ergaenzen.erinnern_am = tageVorher(analyse.kuendbar_bis, 7);
     await db()
       .from("dokumente")
-      .update({ analyse, analyse_status: "fertig", analysiert_am: new Date().toISOString(), ...ergaenzen })
+      .update({ auswertung: analyse, analyse_status: "fertig", analysiert_am: new Date().toISOString(), ...ergaenzen })
       .eq("id", dok.id);
     if (dok.typ === "police" || dok.typ === "vertrag") await praemieAlsAbo(analyse, dok.bereich, dok.titel);
     await log("sven", "dokument_analysiert", dok.id, dok.titel);
