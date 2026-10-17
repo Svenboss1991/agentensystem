@@ -46,40 +46,85 @@ async function withImap<T>(account: AccountRow, fn: (c: ImapFlow) => Promise<T>)
   }
 }
 
+/** Neue Mails eines Ordners ab der zuletzt gesehenen UID (oder ab Startdatum beim ersten Mal). */
+async function ordnerLesen(
+  client: ImapFlow,
+  pfad: string,
+  stand: { uidvalidity: number | null; letzteUid: number | null },
+  startDatum: Date,
+  max: number,
+  prefix: string,
+): Promise<{ mails: IncomingMail[]; uidvalidity: number; letzteUid: number }> {
+  const lock = await client.getMailboxLock(pfad);
+  try {
+    const box = client.mailbox;
+    if (!box) throw new Error(`${pfad} nicht verfügbar`);
+    const uidValidity = Number(box.uidValidity);
+    const resync = stand.uidvalidity !== uidValidity || stand.letzteUid == null;
+
+    let uids: number[];
+    if (resync) {
+      // Erster Lauf oder Ordner neu nummeriert: ab Startdatum, Duplikate fängt die DB ab.
+      uids = (await client.search({ since: startDatum }, { uid: true })) || [];
+    } else {
+      const ab = stand.letzteUid! + 1;
+      uids = ((await client.search({ uid: `${ab}:*` }, { uid: true })) || []).filter((u) => u >= ab);
+    }
+    uids.sort((a, b) => a - b);
+    uids = uids.slice(0, max);
+
+    const mails: IncomingMail[] = [];
+    if (uids.length > 0) {
+      for await (const msg of client.fetch(uids, { uid: true, source: true, internalDate: true }, { uid: true })) {
+        if (!msg.source) continue;
+        const internal = msg.internalDate ? new Date(msg.internalDate) : undefined;
+        mails.push(await parseRaw(msg.source, `${prefix}${msg.uid}`, null, internal));
+      }
+    }
+    const letzte =
+      uids.length > 0 ? uids[uids.length - 1] : resync ? Math.max(0, Number(box.uidNext) - 1) : stand.letzteUid!;
+    return { mails, uidvalidity: uidValidity, letzteUid: letzte };
+  } finally {
+    lock.release();
+  }
+}
+
+async function gesendetOrdner(client: ImapFlow): Promise<string | undefined> {
+  const ordner = await client.list();
+  return (
+    ordner.find((f) => f.specialUse === "\\Sent")?.path ??
+    ordner.find((f) => /^(inbox\.)?(sent|gesendet|sent items|sent messages|enviados)$/i.test(f.path))?.path
+  );
+}
+
 export const imapProvider: MailProvider = {
   async fetchNew(account, startDatum, max): Promise<FetchResult> {
     return withImap(account, async (client) => {
-      const lock = await client.getMailboxLock("INBOX");
-      try {
-        const box = client.mailbox;
-        if (!box) throw new Error("INBOX nicht verfügbar");
-        const uidValidity = Number(box.uidValidity);
-        const resync = account.sync_uidvalidity !== uidValidity || account.sync_letzte_uid == null;
+      const r = await ordnerLesen(
+        client,
+        "INBOX",
+        { uidvalidity: account.sync_uidvalidity, letzteUid: account.sync_letzte_uid },
+        startDatum,
+        max,
+        "",
+      );
+      return { mails: r.mails, sync: { sync_uidvalidity: r.uidvalidity, sync_letzte_uid: r.letzteUid } };
+    });
+  },
 
-        let uids: number[];
-        if (resync) {
-          // Erster Lauf oder Postfach neu nummeriert: ab Startdatum, Duplikate fängt die DB ab.
-          uids = (await client.search({ since: startDatum }, { uid: true })) || [];
-        } else {
-          const ab = account.sync_letzte_uid! + 1;
-          uids = ((await client.search({ uid: `${ab}:*` }, { uid: true })) || []).filter((u) => u >= ab);
-        }
-        uids.sort((a, b) => a - b);
-        uids = uids.slice(0, max);
-
-        const mails: IncomingMail[] = [];
-        if (uids.length > 0) {
-          for await (const msg of client.fetch(uids, { uid: true, source: true, internalDate: true }, { uid: true })) {
-            if (!msg.source) continue;
-            const internal = msg.internalDate ? new Date(msg.internalDate) : undefined;
-            mails.push(await parseRaw(msg.source, String(msg.uid), null, internal));
-          }
-        }
-        const letzte = uids.length > 0 ? uids[uids.length - 1] : resync ? Math.max(0, Number(box.uidNext) - 1) : account.sync_letzte_uid!;
-        return { mails, sync: { sync_uidvalidity: uidValidity, sync_letzte_uid: letzte } };
-      } finally {
-        lock.release();
-      }
+  async fetchSent(account, startDatum, max): Promise<FetchResult> {
+    return withImap(account, async (client) => {
+      const pfad = await gesendetOrdner(client);
+      if (!pfad) return { mails: [], sync: {} };
+      const r = await ordnerLesen(
+        client,
+        pfad,
+        { uidvalidity: account.sync_sent_uidvalidity, letzteUid: account.sync_sent_letzte_uid },
+        startDatum,
+        max,
+        "sent:",
+      );
+      return { mails: r.mails, sync: { sync_sent_uidvalidity: r.uidvalidity, sync_sent_letzte_uid: r.letzteUid } };
     });
   },
 
@@ -117,8 +162,8 @@ export const imapProvider: MailProvider = {
     // Kopie in «Gesendet» ablegen, damit die Antwort auch im normalen Mailprogramm sichtbar ist.
     const raw = await new MailComposer({ ...mail, messageId: info.messageId }).compile().build();
     await withImap(account, async (client) => {
-      const sent = (await client.list()).find((f) => f.specialUse === "\\Sent");
-      if (sent) await client.append(sent.path, raw, ["\\Seen"]);
+      const sent = await gesendetOrdner(client);
+      if (sent) await client.append(sent, raw, ["\\Seen"]);
     }).catch((e) => console.warn("Kopie in Gesendet fehlgeschlagen:", e));
   },
 };

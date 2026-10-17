@@ -4,6 +4,8 @@ import type { AccountRow, MessageRow } from "../db.js";
 export interface IncomingMail {
   externId: string;
   messageIdHeader: string | null;
+  inReplyTo: string | null;
+  references: string | null;
   threadRef: string | null;
   absender: string;
   absenderName: string | null;
@@ -14,7 +16,17 @@ export interface IncomingMail {
 }
 
 /** Neuer Synchronisationsstand, wird nach erfolgreichem Speichern in accounts geschrieben. */
-export type SyncState = Partial<Pick<AccountRow, "sync_uidvalidity" | "sync_letzte_uid" | "sync_seit">>;
+export type SyncState = Partial<
+  Pick<
+    AccountRow,
+    | "sync_uidvalidity"
+    | "sync_letzte_uid"
+    | "sync_seit"
+    | "sync_sent_uidvalidity"
+    | "sync_sent_letzte_uid"
+    | "sync_sent_seit"
+  >
+>;
 
 export interface FetchResult {
   mails: IncomingMail[];
@@ -23,6 +35,8 @@ export interface FetchResult {
 
 export interface MailProvider {
   fetchNew(account: AccountRow, startDatum: Date, max: number): Promise<FetchResult>;
+  /** Gesendete Mails (für Pendenzen). externId ist mit «sent:» vorangestellt. */
+  fetchSent(account: AccountRow, startDatum: Date, max: number): Promise<FetchResult>;
   /** Aus dem Posteingang ins Archiv verschieben. Nie löschen. */
   archive(account: AccountRow, externId: string): Promise<void>;
   sendReply(account: AccountRow, original: MessageRow, text: string): Promise<void>;
@@ -56,9 +70,12 @@ export async function parseRaw(
   const parsed: ParsedMail = await simpleParser(raw);
   const from = parsed.from?.value[0];
   const to = Array.isArray(parsed.to) ? parsed.to.map((a) => a.text).join(", ") : parsed.to?.text;
+  const refs = Array.isArray(parsed.references) ? parsed.references.join(" ") : parsed.references;
   return {
     externId,
     messageIdHeader: parsed.messageId ?? null,
+    inReplyTo: parsed.inReplyTo ?? null,
+    references: refs ?? null,
     threadRef,
     absender: from?.address ?? "unbekannt",
     absenderName: from?.name || null,

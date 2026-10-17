@@ -4,10 +4,10 @@ Datenbank, Mail-Agent und die Seite «Heute». Bauplan siehe `BAUPLAN.md`.
 
 ```
 supabase/migrations/   Datenbank (alle Tabellen aus dem Bauplan, RLS: nur Sven)
-netlify/functions/     mail-agent-tick (alle 5 Min.), send-draft
+netlify/functions/     mail-agent-tick (alle 5 Min.), mail-agent-run (Knopf «Aktualisieren»),
+                       send-draft, oauth-start/oauth-callback (Gmail/Hotmail verbinden)
 netlify/lib/           Mail-Agent, Claude-Aufrufe, Postfach-Anbindungen (IMAP, Gmail, Outlook)
 src/                   Seite «Heute» (React + Vite + Tailwind)
-scripts/oauth.ts       einmalige OAuth-Freigabe für Gmail/Hotmail
 ```
 
 ## Was der Mail-Agent tut
@@ -19,6 +19,7 @@ Alle 5 Minuten (läuft im Netlify-Gratis-Abo; pro Lauf höchstens 30 Sekunden, d
 3. Zuteilen: `finanz` → Finanz-Agent, `service` → Service-Agent, `privat`/`unklar`/`geschäftlich` → Sven, `newsletter` → archiviert.
 4. Bei `service`/`geschäftlich` mit Antwortbedarf: Entwurf in `drafts`, bei EN/ES mit deutscher Übersetzung. Fakten nur aus **geprüften** Einträgen in `knowledge`, sonst Platzhalter `[…]`.
 5. Nur wenn Sven selbst handeln muss: Eintrag in `tasks`.
+6. **Pendenzen:** Der Agent liest auch die gesendeten Mails. Fragt Sven etwas an (Datenauskunft, Offerte, Bank …), entsteht eine Pendenz mit Wiedervorlage-Datum. Eine Antwort im selben Faden oder von derselben Gegenpartei erledigt sie. Ist die Wiedervorlage erreicht und keine Antwort da, entsteht die Aufgabe «Nachfassen: …». Pendenzen lassen sich auf «Heute» auch von Hand erfassen, verschieben und abhaken.
 
 Grenzen: Der Agent sendet nie selbst. Gesendet wird nur über «Freigeben & senden» auf der Seite «Heute» (Funktion `send-draft` prüft, dass Svens Login dahintersteht). Nichts wird gelöscht; Newsletter werden höchstens ins Archiv verschoben (`MAIL_ARCHIV_IM_POSTFACH=true`). Jede Aktion steht in `agent_log`.
 
@@ -47,16 +48,14 @@ insert into public.app_owner (user_id) select id from auth.users where email = '
 
 Hostpoint/Hostinger: IMAP-Port 993, SMTP-Port 465 (SSL). Hosts in der Vorlage vor dem Start mit den Angaben im Kundencenter abgleichen. Der Archivordner heisst je nach Server `Archive` oder `INBOX.Archive`.
 
-### 5. OAuth-Freigabe (Gmail, Hotmail) – macht Sven selbst
-**Gmail:** In der Google Cloud Console ein Projekt anlegen, Gmail API aktivieren, OAuth-Client vom Typ «Desktop-App» erstellen. Solange die App im Testmodus ist, Svens Adresse als Testnutzer eintragen (Achtung: im Testmodus laufen Refresh-Tokens nach 7 Tagen ab; für Dauerbetrieb die App veröffentlichen).
-```
-GOOGLE_CLIENT_ID=… GOOGLE_CLIENT_SECRET=… npm run oauth -- google
-```
-**Hotmail:** Im Azure-Portal *App registrations* → neue App, Kontotyp «Persönliche Microsoft-Konten», Plattform «Mobile und Desktop» mit Redirect `http://localhost:8765/callback`.
-```
-MICROSOFT_CLIENT_ID=… npm run oauth -- microsoft
-```
-Das ausgegebene Refresh-Token als `MAIL_<secret_ref>_REFRESH_TOKEN` in Netlify eintragen. Microsoft-Tokens laufen nach längerer Nichtnutzung ab; dann den Befehl erneut ausführen.
+### 5. Gmail und Hotmail verbinden – macht Sven selbst
+Einmalig eine OAuth-App anlegen, die Werte in Netlify eintragen, dann auf «Heute» unter «Postfächer» auf **Verbinden** klicken. Redirect-URI für beide: `https://<seite>.netlify.app/.netlify/functions/oauth-callback`.
+
+**Hotmail:** Im Azure-Portal *App registrations* → neue App, Kontotyp «Persönliche Microsoft-Konten», Plattform «Web» mit obiger Redirect-URI. Unter *Certificates & secrets* ein Client-Secret erstellen. Netlify: `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`.
+
+**Gmail:** In der Google Cloud Console Gmail API aktivieren, OAuth-Client «Webanwendung» mit obiger Redirect-URI. Im Testmodus laufen Tokens nach 7 Tagen ab, für Dauerbetrieb die App veröffentlichen. Netlify: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`.
+
+Die Refresh-Tokens liegen in der Tabelle `oauth_tokens` (nur für den Service-Role-Schlüssel lesbar), weil Microsoft und Google sie laufend erneuern.
 
 ### 6. Wissensbasis
 Einträge in `knowledge` anlegen (Marke, Thema, Antwort, Sprache). Der Agent nutzt nur Einträge mit `geprueft = true`.

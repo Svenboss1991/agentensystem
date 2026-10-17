@@ -24,16 +24,23 @@ export interface AccountRow {
   sync_uidvalidity: number | null;
   sync_letzte_uid: number | null;
   sync_seit: string | null;
+  sync_sent_uidvalidity: number | null;
+  sync_sent_letzte_uid: number | null;
+  sync_sent_seit: string | null;
 }
 
 export interface MessageRow {
   id: string;
   account_id: string;
+  richtung: "eingehend" | "ausgehend";
   extern_id: string;
   message_id_header: string | null;
+  in_reply_to: string | null;
+  references_header: string | null;
   thread_ref: string | null;
   absender: string;
   absender_name: string | null;
+  empfaenger: string | null;
   betreff: string | null;
   text: string | null;
   empfangen_am: string | null;
@@ -64,4 +71,15 @@ export function db(): SupabaseClient {
 export async function log(agent: Agent, aktion: string, ziel: string | null, ergebnis: string): Promise<void> {
   const { error } = await db().from("agent_log").insert({ agent, aktion, ziel, ergebnis: ergebnis.slice(0, 2000) });
   if (error) console.error("agent_log fehlgeschlagen:", error.message);
+}
+
+export interface PendenzRow {
+  id: string;
+  titel: string;
+  gegenpartei: string | null;
+  gegenpartei_adresse: string | null;
+  worauf: string | null;
+  seit: string;
+  wiedervorlage_am: string;
+  thread_message_ids: string[];
 }

@@ -53,3 +53,16 @@ export async function mailsAbrufen(): Promise<string> {
   if (!res.ok) throw new Error(body.fehler ?? `Abrufen fehlgeschlagen (${res.status})`);
   return body.ergebnis ?? "";
 }
+
+/** Liefert die Anmeldeseite von Google/Microsoft, um ein Gmail-/Hotmail-Postfach zu verbinden. */
+export async function oauthStarten(accountId: string): Promise<string> {
+  const { data } = await supabase.auth.getSession();
+  const res = await fetch("/.netlify/functions/oauth-start", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${data.session?.access_token}` },
+    body: JSON.stringify({ account_id: accountId }),
+  });
+  const body = (await res.json().catch(() => ({}))) as { url?: string; fehler?: string };
+  if (!res.ok || !body.url) throw new Error(body.fehler ?? `Verbinden fehlgeschlagen (${res.status})`);
+  return body.url;
+}

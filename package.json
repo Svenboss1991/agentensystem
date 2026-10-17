@@ -5,8 +5,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "typecheck": "tsc",
-    "oauth": "node scripts/oauth.ts"
+    "typecheck": "tsc"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.135.0",
