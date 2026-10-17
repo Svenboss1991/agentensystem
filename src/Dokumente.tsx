@@ -43,7 +43,9 @@ interface Analyse {
   anbieter: string | null;
   nummer: string | null;
   versichert: string | null;
-  praemie: { betrag: number | null; waehrung: string | null; intervall: string | null } | null;
+  praemie_betrag: number | null;
+  praemie_waehrung: string | null;
+  praemie_intervall: string | null;
   beginn: string | null;
   ende: string | null;
   verlaengerung: string | null;
@@ -58,8 +60,10 @@ interface Analyse {
 const FELDER =
   "id, titel, typ, bereich, datei_pfad, datei_name, groesse, gueltig_bis, erinnern_am, notiz, erstellt_am, auswertung, analyse_status, analyse_fehler, firmen(id, name), kontakte(id, name, email), akten(id, nummer)";
 
-const praemieText = (p: Analyse["praemie"]) =>
-  p?.betrag != null ? `${p.waehrung ?? ""} ${p.betrag.toLocaleString("de-CH", { minimumFractionDigits: 2 })} ${p.intervall ?? ""}`.trim() : null;
+const praemieText = (a: Analyse | null | undefined) =>
+  a?.praemie_betrag != null
+    ? `${a.praemie_waehrung ?? ""} ${a.praemie_betrag.toLocaleString("de-CH", { minimumFractionDigits: 2 })} ${a.praemie_intervall ?? ""}`.trim()
+    : null;
 
 /** Claude liest Police oder Vertrag; danach ist die Analyse beim Dokument sichtbar. */
 async function analysieren(id: string): Promise<void> {
@@ -93,7 +97,7 @@ function AnalyseAnsicht({ a }: { a: Analyse }) {
         {zeile("Anbieter", a.anbieter)}
         {zeile("Nummer", a.nummer)}
         {zeile("Versichert", a.versichert)}
-        {zeile("Prämie / Kosten", praemieText(a.praemie))}
+        {zeile("Prämie / Kosten", praemieText(a))}
         {zeile("Laufzeit", [a.beginn && datumKurz(a.beginn), a.ende && datumKurz(a.ende)].filter(Boolean).join(" – ") || null)}
         {zeile("Verlängerung", a.verlaengerung)}
         {zeile("Kündigungsfrist", a.kuendigungsfrist)}
@@ -452,7 +456,7 @@ function Versicherungen() {
               <tr key={d.id} className="border-t border-stone-100">
                 <td className="py-1.5 pr-2">{d.auswertung?.art ?? d.titel}</td>
                 <td className="py-1.5 pr-2">{d.auswertung?.anbieter ?? d.firmen?.name ?? ""}</td>
-                <td className="py-1.5 pr-2 text-right tabular-nums">{praemieText(d.auswertung?.praemie ?? null) ?? ""}</td>
+                <td className="py-1.5 pr-2 text-right tabular-nums">{praemieText(d.auswertung) ?? ""}</td>
                 <td className="py-1.5 text-right">{d.auswertung?.kuendbar_bis ? datumKurz(d.auswertung.kuendbar_bis) : ""}</td>
               </tr>
             ))}

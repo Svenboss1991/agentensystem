@@ -23,12 +23,12 @@ function intervall(text: string | null): string | null {
 }
 
 async function praemieAlsAbo(a: DokumentAnalyse, bereich: string, dokumentTitel: string): Promise<void> {
-  const iv = intervall(a.praemie?.intervall ?? null);
-  if (!a.anbieter || a.praemie?.betrag == null || !iv) return;
+  const iv = intervall(a.praemie_intervall);
+  if (!a.anbieter || a.praemie_betrag == null || !iv) return;
   const { data: vorhanden } = await db().from("abos").select("id").ilike("anbieter", a.anbieter).ilike("produkt", a.art ?? dokumentTitel).limit(1);
   const werte = {
-    betrag: a.praemie.betrag,
-    waehrung: a.praemie.waehrung ?? "CHF",
+    betrag: a.praemie_betrag,
+    waehrung: a.praemie_waehrung ?? "CHF",
     intervall: iv,
     beginn: istDatum(a.beginn) ? a.beginn : null,
     laufzeit_bis: istDatum(a.ende) ? a.ende : null,

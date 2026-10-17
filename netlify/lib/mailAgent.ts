@@ -1,4 +1,4 @@
-import { ausgangPruefen, einordnen, entwerfen, istZeitproblem, type AkteKurz, type AkteZuordnung, type Einordnung } from "./claude.js";
+import { aboLesen, ausgangPruefen, einordnen, entwerfen, istZeitproblem, type AboInfo, type AkteKurz, type AkteZuordnung, type Einordnung } from "./claude.js";
 import { db, log, type AccountRow, type AkteRow, type Agent, type Kategorie, type Marke, type MessageRow } from "./db.js";
 import { envOptional } from "./env.js";
 import { providerFor } from "./providers/index.js";
@@ -290,7 +290,6 @@ async function kontaktErfassen(row: MessageRow, email: string | null, name: stri
 
 // ─── Abos ────────────────────────────────────────────────────────────────────
 
-type AboInfo = NonNullable<Einordnung["abo"]>;
 
 const STATUS_NACH_EREIGNIS: Record<AboInfo["ereignis"], string | null> = {
   neu: "aktiv",
@@ -439,10 +438,15 @@ async function eingangVerarbeiten(row: MessageRow, account: AccountRow, frist: n
   }
 
   const akteId = await akteNachfuehren(row, e.akte, row.absender.toLowerCase(), e.marke === "keine" ? null : e.marke);
-  await kontaktErfassen(row, row.absender, row.absender_name, e.absender_details);
-  if (e.abo) {
+  await kontaktErfassen(row, row.absender, row.absender_name, {
+    firma: e.absender_firma,
+    position: e.absender_position,
+    telefon: e.absender_telefon,
+    mobil: e.absender_mobil,
+  });
+  if (e.abo_betroffen) {
     const bereich = e.kategorie === "finanz" ? "finanzen" : e.marke !== "keine" ? e.marke : "privat";
-    await aboNachfuehren(row, e.abo, bereich);
+    await aboNachfuehren(row, await aboLesen(alsMail(row), account, heute(), frist), bereich);
   }
 
   const brauchtEntwurf = (e.kategorie === "service" || e.kategorie === "geschäftlich") && e.antwort_noetig;
