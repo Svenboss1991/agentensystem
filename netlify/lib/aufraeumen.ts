@@ -3,6 +3,7 @@ import { muellBewerten, nachAbsender, type AbsenderGruppe } from "./claude.js";
 import { db, log, type AccountRow } from "./db.js";
 import { gmail } from "./providers/gmail.js";
 import { withImap } from "./providers/imap.js";
+import { parseRaw } from "./providers/types.js";
 import { accessToken } from "./providers/oauth.js";
 import { graph } from "./providers/outlook.js";
 
@@ -15,6 +16,15 @@ export interface StichprobenMail {
   betreff: string;
 }
 
+export interface BeispielMail {
+  betreff: string | null;
+  datum: string;
+  text: string;
+}
+
+const KUERZEN = 20_000;
+const kurz = (t: string) => (t.length > KUERZEN ? `${t.slice(0, KUERZEN)}\n[… gekürzt]` : t);
+
 export interface Aufraeumer {
   kategorien: Record<string, string>; // key → Titel
   vorschau(account: AccountRow): Promise<{ kategorien: { key: string; titel: string; anzahl: number }[]; papierkorb: number }>;
@@ -22,6 +32,8 @@ export interface Aufraeumer {
   seite(account: AccountRow, kategorie: string, cursor: string | null): Promise<{ mails: StichprobenMail[]; naechster: string | null }>;
   /** Mails der Absender in dieser Kategorie in den Papierkorb, bis `ende`. Gibt Anzahl und noch offene Absender zurück. */
   verschieben(account: AccountRow, kategorie: string, adressen: string[], ende: number): Promise<{ verschoben: number; rest: string[] }>;
+  /** Die neuesten Mails eines Absenders in dieser Kategorie, mit ganzem Text (zum Entscheiden). */
+  beispiele(account: AccountRow, kategorie: string, adresse: string, max: number): Promise<BeispielMail[]>;
 }
 
 const vorTagen = (t: number) => new Date(Date.now() - t * 86_400_000);
@@ -85,6 +97,18 @@ const gmailAufraeumer: Aufraeumer = {
       }
     }
     return { mails, naechster: liste.nextPageToken ?? null };
+  },
+
+  async beispiele(account, kategorie, adresse, max) {
+    const q = `${G_KAT[kategorie].q} from:${adresse.replace(/[^\w.@+-]/g, "")}`;
+    const ids = ((await gmail<GListe>(account, gPfad(q, max))).messages ?? []).map((m) => m.id);
+    return Promise.all(
+      ids.map(async (id) => {
+        const m = await gmail<{ raw: string; internalDate: string }>(account, `/messages/${id}?format=raw`);
+        const p = await parseRaw(Buffer.from(m.raw, "base64url"), id, null, new Date(Number(m.internalDate)));
+        return { betreff: p.betreff, datum: p.empfangenAm.toISOString(), text: kurz(p.text) };
+      }),
+    );
   },
 
   async verschieben(account, kategorie, adressen, ende) {
@@ -181,6 +205,17 @@ const hotmailAufraeumer: Aufraeumer = {
     return { mails, naechster: r["@odata.nextLink"] ?? null };
   },
 
+  async beispiele(account, kategorie, adresse, max) {
+    const r = (await (
+      await graph(
+        account,
+        `${hListe(kategorie, ` and from/emailAddress/address eq '${adresse.replace(/'/g, "''")}'`, max, "subject,body,receivedDateTime")}`,
+        { headers: { Prefer: 'outlook.body-content-type="text"' } },
+      )
+    ).json()) as { value: { subject?: string; receivedDateTime: string; body?: { content?: string } }[] };
+    return r.value.map((m) => ({ betreff: m.subject ?? null, datum: m.receivedDateTime, text: kurz(m.body?.content ?? "") }));
+  },
+
   async verschieben(account, kategorie, adressen, ende) {
     let verschoben = 0;
     const rest = [...adressen];
@@ -260,6 +295,29 @@ const imapAufraeumer: Aufraeumer = {
           }
         }
         return { mails, naechster: alle.length > uids.length ? String(uids[uids.length - 1]) : null };
+      } finally {
+        lock.release();
+      }
+    }),
+
+  beispiele: (account, kategorie, adresse, max) =>
+    withImap(account, async (c) => {
+      const pfad = await I_KAT[kategorie].ordner(c);
+      if (!pfad) return [];
+      const lock = await c.getMailboxLock(pfad);
+      try {
+        const uids = ((await c.search({ ...I_KAT[kategorie].suche(), from: adresse }, { uid: true })) || [])
+          .sort((a, b) => b - a)
+          .slice(0, max);
+        const mails: BeispielMail[] = [];
+        if (uids.length) {
+          for await (const m of c.fetch(uids, { uid: true, source: true, internalDate: true }, { uid: true })) {
+            if (!m.source) continue;
+            const p = await parseRaw(m.source, String(m.uid), null, m.internalDate ? new Date(m.internalDate) : undefined);
+            mails.push({ betreff: p.betreff, datum: p.empfangenAm.toISOString(), text: kurz(p.text) });
+          }
+        }
+        return mails.sort((a, b) => b.datum.localeCompare(a.datum));
       } finally {
         lock.release();
       }

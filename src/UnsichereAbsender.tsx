@@ -1,24 +1,16 @@
 import { useEffect, useState } from "react";
 import { funktion, supabase } from "./lib/supabase";
+import AbsenderPruefen, { type Unsicher } from "./AbsenderPruefen";
 import { Abschnitt, Karte, Knopf } from "./ui";
 
-interface Unsicher {
-  id: string;
-  account_id: string;
-  kategorie: string;
-  adresse: string;
-  name: string | null;
-  beispiele: string[];
-  anzahl: number;
-  grund: string | null;
-  accounts: { adresse: string } | null;
-}
 
 /** Der Agent räumt selbständig auf und fragt nur bei Absendern, bei denen er unsicher ist. */
 export default function UnsichereAbsender({ version }: { version: unknown }) {
   const [liste, setListe] = useState<Unsicher[]>([]);
   const [aufgeraeumt, setAufgeraeumt] = useState(0);
   const [laeuft, setLaeuft] = useState<string | null>(null);
+  const [pruefen, setPruefen] = useState(false);
+  const [neu, setNeu] = useState(0);
 
   useEffect(() => {
     supabase
@@ -26,7 +18,7 @@ export default function UnsichereAbsender({ version }: { version: unknown }) {
       .select("id, account_id, kategorie, adresse, name, beispiele, anzahl, grund, accounts(adresse)")
       .eq("urteil", "unsicher")
       .order("anzahl", { ascending: false })
-      .limit(30)
+      .limit(500)
       .then(({ data }) => setListe((data ?? []) as unknown as Unsicher[]));
     // «123 Mails in den Papierkorb …» aus dem Protokoll der letzten 7 Tage zusammenzählen.
     supabase
@@ -36,7 +28,7 @@ export default function UnsichereAbsender({ version }: { version: unknown }) {
       .eq("agent", "mail")
       .gte("zeit", new Date(Date.now() - 7 * 86_400_000).toISOString())
       .then(({ data }) => setAufgeraeumt((data ?? []).reduce((s, r) => s + (parseInt(r.ergebnis ?? "", 10) || 0), 0)));
-  }, [version]);
+  }, [version, neu]);
 
   async function entscheiden(u: Unsicher, urteil: "muell" | "behalten") {
     setLaeuft(u.id);
@@ -69,10 +61,27 @@ export default function UnsichereAbsender({ version }: { version: unknown }) {
           verschoben (30 Tage zurückholbar).
         </p>
       )}
+      {pruefen && (
+        <AbsenderPruefen
+          liste={liste}
+          entschieden={() => {}}
+          schliessen={() => {
+            setPruefen(false);
+            setNeu((n) => n + 1);
+          }}
+        />
+      )}
+      {liste.length > 0 && (
+        <div>
+          <Knopf onClick={() => setPruefen(true)} primaer>
+            Durchgehen (Mail ganz ansehen, Enter = Papierkorb, Leertaste = behalten)
+          </Knopf>
+        </div>
+      )}
       {liste.length > 0 && (
         <Karte>
           <div className="divide-y divide-stone-100">
-            {liste.map((u) => (
+            {liste.slice(0, 15).map((u) => (
               <div key={u.id} className="flex flex-wrap items-start gap-2 py-2 first:pt-0 last:pb-0">
                 <div className="min-w-0 flex-1 text-sm">
                   <span className="font-medium">{u.name || u.adresse}</span>
@@ -93,6 +102,7 @@ export default function UnsichereAbsender({ version }: { version: unknown }) {
               </div>
             ))}
           </div>
+          {liste.length > 15 && <p className="mt-2 text-xs text-stone-500">… und {liste.length - 15} weitere</p>}
         </Karte>
       )}
     </Abschnitt>

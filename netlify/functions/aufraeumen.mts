@@ -50,6 +50,12 @@ export default async (req: Request) => {
       return json(200, { absender: bewertet, weitere });
     }
 
+    if (body.aktion === "beispiele") {
+      const adresse = body.absender?.[0];
+      if (!adresse) return json(400, { fehler: "Absender fehlt" });
+      return json(200, { mails: await aufraeumerFuer(account).beispiele(account, kategorie, adresse, 3) });
+    }
+
     if (body.aktion === "papierkorb") {
       return json(200, await absenderVerschieben(account, kategorie, body.absender ?? [], start + 20_000, "sven"));
     }
