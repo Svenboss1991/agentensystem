@@ -30,6 +30,15 @@ const MARKEN = `Svens Firmen:
 - clave_suiza: Clave Suiza, Svens dritte Firma.
 - keine: privat oder keiner Firma zuzuordnen.`;
 
+/** Halbe Emoji-Zeichen (z. B. nach dem Kürzen) ersetzen; die API lehnt sie als ungültiges JSON ab. */
+export const sauber = (t: string) =>
+  t.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "\uFFFD");
+
+function inhaltSauber(user: string | Anthropic.Beta.Messages.BetaContentBlockParam[]) {
+  if (typeof user === "string") return sauber(user);
+  return user.map((b) => (b.type === "text" ? { ...b, text: sauber(b.text) } : b));
+}
+
 async function ask<T extends z.ZodType>(
   schema: T,
   system: string,
@@ -45,8 +54,8 @@ async function ask<T extends z.ZodType>(
     betas: ["server-side-fallback-2026-07-01"],
     fallbacks: "default",
     output_config: { effort, format: betaZodOutputFormat(schema) },
-    system,
-    messages: [{ role: "user", content: user }],
+    system: sauber(system),
+    messages: [{ role: "user", content: inhaltSauber(user) }],
   }, { timeout: rest, maxRetries: 0 });
   if (res.stop_reason === "refusal") throw new Error("Claude hat die Anfrage abgelehnt");
   if (res.stop_reason === "max_tokens") throw new Error("Claude-Antwort abgeschnitten (max_tokens)");
@@ -342,7 +351,8 @@ export function nachAbsender(mails: { adresse: string; name: string | null; betr
     const key = m.adresse.toLowerCase();
     const g = gruppen.get(key) ?? { adresse: key, name: m.name, anzahl: 0, beispiele: [] };
     g.anzahl++;
-    if (g.beispiele.length < 3 && m.betreff && !g.beispiele.includes(m.betreff)) g.beispiele.push(m.betreff.slice(0, 120));
+    const betreff = Array.from(m.betreff ?? "").slice(0, 120).join("");
+    if (g.beispiele.length < 3 && betreff && !g.beispiele.includes(betreff)) g.beispiele.push(betreff);
     gruppen.set(key, g);
   }
   return [...gruppen.values()].sort((a, b) => b.anzahl - a.anzahl).slice(0, max);
