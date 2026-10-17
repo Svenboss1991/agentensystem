@@ -1,5 +1,5 @@
 import { json, nichtSven } from "../lib/auth.js";
-import { absenderVerschieben, aufraeumerFuer, aufraeumSchritt, neueAbsenderBewerten } from "../lib/aufraeumen.js";
+import { absenderVerschieben, aufraeumerFuer, aufraeumSchritt, istWoche, neueAbsenderBewerten } from "../lib/aufraeumen.js";
 import { istZeitproblem } from "../lib/claude.js";
 import { db, type AccountRow } from "../lib/db.js";
 
@@ -29,7 +29,7 @@ export default async (req: Request) => {
     if (body.aktion === "schritt") {
       // «Jetzt aufräumen»: wie der automatische Lauf, Seite für Seite durch alle Jahre.
       // Die Seite ruft wiederholt auf, bis «weiter» null ist.
-      const kategorien = Object.keys(aufraeumerFuer(account).kategorien);
+      const kategorien = Object.keys(aufraeumerFuer(account).kategorien).filter((k) => !istWoche(k));
       const index = Number((body as { index?: number }).index ?? 0);
       const key = kategorien[index];
       if (!key) return json(200, { verschoben: 0, unsicher: 0, weiter: null });

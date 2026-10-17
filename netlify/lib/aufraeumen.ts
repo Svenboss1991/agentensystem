@@ -38,17 +38,26 @@ export interface Aufraeumer {
 
 const vorTagen = (t: number) => new Date(Date.now() - t * 86_400_000);
 
+/** «…_woche»-Kategorien laufen jeden Montag über die Mails der letzten Woche; die übrigen sind der grosse Durchgang. */
+export const istWoche = (kategorie: string) => kategorie.endsWith("_woche");
+
 // ─── Gmail ───────────────────────────────────────────────────────────────────
 
 const G_SCHUTZ = "-is:starred -is:important";
 const G_KAT: Record<string, { titel: string; q: string }> = {
-  werbung: { titel: "Werbung (Tab «Werbung»), älter als 30 Tage", q: `category:promotions older_than:30d ${G_SCHUTZ}` },
+  werbung: { titel: "Werbung (Tab «Werbung»)", q: `category:promotions ${G_SCHUTZ}` },
   allgemein: { titel: "Posteingang «Allgemein», älter als 1 Jahr", q: `category:primary older_than:1y ${G_SCHUTZ}` },
-  sozial: { titel: "Soziale Netzwerke, älter als 30 Tage", q: `category:social older_than:30d ${G_SCHUTZ}` },
-  foren: { titel: "Foren und Mailinglisten, älter als 30 Tage", q: `category:forums older_than:30d ${G_SCHUTZ}` },
+  sozial: { titel: "Soziale Netzwerke", q: `category:social ${G_SCHUTZ}` },
+  foren: { titel: "Foren und Mailinglisten", q: `category:forums ${G_SCHUTZ}` },
   updates: { titel: "Benachrichtigungen (Tab «Updates»), älter als 1 Jahr", q: `category:updates older_than:1y ${G_SCHUTZ}` },
   gross: { titel: "Grosse Mails über 10 MB, älter als 2 Jahre", q: `larger:10M older_than:2y ${G_SCHUTZ}` },
   spam: { titel: "Spam", q: "in:spam" },
+  // Wöchentlich (Montag): nur die Mails der letzten Woche.
+  werbung_woche: { titel: "Werbung der letzten Woche", q: `category:promotions newer_than:8d ${G_SCHUTZ}` },
+  sozial_woche: { titel: "Soziale Netzwerke der letzten Woche", q: `category:social newer_than:8d ${G_SCHUTZ}` },
+  foren_woche: { titel: "Foren der letzten Woche", q: `category:forums newer_than:8d ${G_SCHUTZ}` },
+  updates_woche: { titel: "Benachrichtigungen der letzten Woche", q: `category:updates newer_than:8d ${G_SCHUTZ}` },
+  spam_woche: { titel: "Spam der letzten Woche", q: "in:spam newer_than:8d" },
 };
 
 interface GListe {
@@ -69,7 +78,9 @@ const gmailAufraeumer: Aufraeumer = {
   async vorschau(account) {
     const schaetzung = async (q: string) => (await gmail<GListe>(account, gPfad(q, 1))).resultSizeEstimate ?? 0;
     const kategorien = await Promise.all(
-      Object.entries(G_KAT).map(async ([key, k]) => ({ key, titel: k.titel, anzahl: await schaetzung(k.q) })),
+      Object.entries(G_KAT)
+        .filter(([key]) => !istWoche(key))
+        .map(async ([key, k]) => ({ key, titel: k.titel, anzahl: await schaetzung(k.q) })),
     );
     return { kategorien, papierkorb: await schaetzung("in:trash") };
   },
@@ -136,9 +147,9 @@ const gmailAufraeumer: Aufraeumer = {
 const H_SCHUTZ = "flag/flagStatus ne 'flagged' and importance ne 'high'";
 const H_KAT: Record<string, { titel: string; ordner: string; filter: () => string }> = {
   sonstige: {
-    titel: "Posteingang «Sonstige» (Werbung, Newsletter), älter als 30 Tage",
+    titel: "Posteingang «Sonstige» (Werbung, Newsletter)",
     ordner: "inbox",
-    filter: () => `inferenceClassification eq 'other' and receivedDateTime lt ${vorTagen(30).toISOString()} and ${H_SCHUTZ}`,
+    filter: () => `inferenceClassification eq 'other' and ${H_SCHUTZ}`,
   },
   relevant: {
     titel: "Posteingang «Relevant», älter als 1 Jahr",
@@ -151,6 +162,12 @@ const H_KAT: Record<string, { titel: string; ordner: string; filter: () => strin
     filter: () => `hasAttachments eq true and receivedDateTime lt ${vorTagen(730).toISOString()} and ${H_SCHUTZ}`,
   },
   junk: { titel: "Junk-E-Mail", ordner: "junkemail", filter: () => `receivedDateTime lt ${new Date().toISOString()}` },
+  sonstige_woche: {
+    titel: "«Sonstige» der letzten Woche",
+    ordner: "inbox",
+    filter: () => `inferenceClassification eq 'other' and receivedDateTime ge ${vorTagen(8).toISOString()} and ${H_SCHUTZ}`,
+  },
+  junk_woche: { titel: "Junk der letzten Woche", ordner: "junkemail", filter: () => `receivedDateTime ge ${vorTagen(8).toISOString()}` },
 };
 
 const hListe = (key: string, zusatz: string, top: number, felder: string, zaehlen = false) =>
@@ -187,7 +204,9 @@ const hotmailAufraeumer: Aufraeumer = {
       return ((await r.json()) as { "@odata.count"?: number })["@odata.count"] ?? 0;
     };
     const kategorien = await Promise.all(
-      Object.entries(H_KAT).map(async ([key, k]) => ({ key, titel: k.titel, anzahl: await zaehlen(key) })),
+      Object.entries(H_KAT)
+        .filter(([key]) => !istWoche(key))
+        .map(async ([key, k]) => ({ key, titel: k.titel, anzahl: await zaehlen(key) })),
     );
     const g = (await (await graph(account, "/mailFolders/deleteditems?$select=totalItemCount")).json()) as { totalItemCount?: number };
     return { kategorien, papierkorb: g.totalItemCount ?? 0 };
@@ -249,6 +268,11 @@ async function ordnerMit(c: ImapFlow, specialUse: string, muster: RegExp): Promi
 const I_KAT: Record<string, { titel: string; ordner: (c: ImapFlow) => Promise<string | undefined>; suche: () => Record<string, unknown> }> = {
   alt: { titel: "Posteingang, älter als 1 Jahr", ordner: async () => "INBOX", suche: () => ({ before: vorTagen(365), flagged: false }) },
   spam: { titel: "Spam / Junk", ordner: (c) => ordnerMit(c, "\\Junk", /(^|\.)(spam|junk)$/i), suche: () => ({ all: true }) },
+  spam_woche: {
+    titel: "Spam der letzten Woche",
+    ordner: (c) => ordnerMit(c, "\\Junk", /(^|\.)(spam|junk)$/i),
+    suche: () => ({ since: vorTagen(8) }),
+  },
 };
 const iPapierkorb = (c: ImapFlow) => ordnerMit(c, "\\Trash", /(^|\.)(trash|papierkorb|deleted|gelöscht)/i);
 
@@ -258,7 +282,7 @@ const imapAufraeumer: Aufraeumer = {
   vorschau: (account) =>
     withImap(account, async (c) => {
       const kategorien = [];
-      for (const [key, k] of Object.entries(I_KAT)) {
+      for (const [key, k] of Object.entries(I_KAT).filter(([key]) => !istWoche(key))) {
         const pfad = await k.ordner(c);
         let anzahl = 0;
         if (pfad) {
@@ -378,7 +402,8 @@ export async function neueAbsenderBewerten(
   const a = aufraeumerFuer(account);
   const [{ mails, naechster }, { data: bekannt }] = await Promise.all([
     a.seite(account, kategorie, cursor),
-    db().from("aufraeum_absender").select("adresse").eq("account_id", account.id).eq("kategorie", kategorie),
+    // Ein einmal beurteilter Absender gilt für alle Kategorien dieses Postfachs.
+    db().from("aufraeum_absender").select("adresse").eq("account_id", account.id),
   ]);
   const schonDa = new Set([...(bekannt ?? []).map((b) => b.adresse as string), ...zusaetzlichBekannt]);
   const gruppenAlle = nachAbsender(mails, 1000);
@@ -443,11 +468,11 @@ export async function aufraeumSchritt(
         .from("aufraeum_absender")
         .select("adresse")
         .eq("account_id", account.id)
-        .eq("kategorie", kategorie)
         .eq("urteil", "muell")
         .in("adresse", r.seitenAbsender)
     : { data: [] };
-  const v = await absenderVerschieben(account, kategorie, (muell ?? []).map((m) => m.adresse as string), start + 26_000, von);
+  const muellAdressen = [...new Set((muell ?? []).map((m) => m.adresse as string))];
+  const v = await absenderVerschieben(account, kategorie, muellAdressen, start + 26_000, von);
 
   // Erst weiterblättern, wenn diese Seite ganz bewertet und aufgeräumt ist.
   const seiteFertig = r.weitere === 0 && v.rest.length === 0;

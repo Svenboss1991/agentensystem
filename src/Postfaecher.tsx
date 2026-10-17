@@ -10,6 +10,24 @@ export default function Postfaecher({ postfaecher, neuLaden }: { postfaecher: Po
   const [meldung, setMeldung] = useState<{ ok: boolean; text: string } | null>(null);
   const [verbindet, setVerbindet] = useState<string | null>(null);
   const [aufraeumen, setAufraeumen] = useState<string | null>(null);
+  const [putz, setPutz] = useState<Record<string, { fertig: boolean; geprueft: number }>>({});
+
+  // Stand des grossen Durchgangs je Postfach (Kategorien ohne «_woche»).
+  useEffect(() => {
+    supabase
+      .from("aufraeum_stand")
+      .select("account_id, kategorie, gepruefte_mails, durchgang_fertig_am")
+      .then(({ data }) => {
+        const r: Record<string, { fertig: boolean; geprueft: number; offen: number }> = {};
+        for (const s of data ?? []) {
+          if (String(s.kategorie).endsWith("_woche")) continue;
+          const x = (r[s.account_id] ??= { fertig: true, geprueft: 0, offen: 0 });
+          x.geprueft += s.gepruefte_mails ?? 0;
+          if (!s.durchgang_fertig_am) x.fertig = false;
+        }
+        setPutz(r);
+      });
+  }, [postfaecher]);
 
   // Rückmeldung nach der Anmeldung bei Google/Microsoft (…/?verbunden=… oder ?oauth_fehler=…)
   useEffect(() => {
@@ -57,6 +75,15 @@ export default function Postfaecher({ postfaecher, neuLaden }: { postfaecher: Po
                   <Knopf onClick={() => verbinden(p)} primaer disabled={verbindet === p.id}>
                     {verbindet === p.id ? "Öffnet …" : "Verbinden"}
                   </Knopf>
+                )}
+                {p.aktiv && p.auto_aufraeumen && (
+                  <span className="text-xs text-stone-400">
+                    {!putz[p.id]
+                      ? "Grossputz startet in Kürze"
+                      : putz[p.id].fertig
+                        ? "Grossputz fertig · jeden Montag 8 Uhr die letzte Woche"
+                        : `Grossputz läuft · ${putz[p.id].geprueft.toLocaleString("de-CH")} Mails geprüft`}
+                  </span>
                 )}
                 {p.aktiv && (
                   <label className="flex items-center gap-1 text-xs text-stone-500">
