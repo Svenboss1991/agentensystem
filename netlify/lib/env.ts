@@ -1,17 +1,23 @@
-// Die Supabase-Werte stehen für die Seite schon als VITE_… bereit; die Funktionen dürfen sie mitbenutzen.
-const ERSATZ: Record<string, string> = {
+// Die Supabase-Adresse und der öffentliche Schlüssel stehen für die Seite als VITE_… bereit
+// und funktionieren dort nachweislich. Die Funktionen nehmen zuerst diese Werte.
+const ZUERST: Record<string, string> = {
   SUPABASE_URL: "VITE_SUPABASE_URL",
   SUPABASE_ANON_KEY: "VITE_SUPABASE_ANON_KEY",
 };
 
+function lesen(name: string): string | undefined {
+  const value = (ZUERST[name] && process.env[ZUERST[name]]?.trim()) || process.env[name]?.trim();
+  return value || undefined;
+}
+
 export function env(name: string): string {
-  const value = process.env[name] || (ERSATZ[name] ? process.env[ERSATZ[name]] : undefined);
+  const value = lesen(name);
   if (!value) throw new Error(`Umgebungsvariable ${name} fehlt`);
   return value;
 }
 
 export function envOptional(name: string): string | undefined {
-  return process.env[name] || undefined;
+  return lesen(name);
 }
 
 /** Geheimnis eines Postfachs, z. B. secretFor("HOSTPOINT_INFO", "PASSWORD") → MAIL_HOSTPOINT_INFO_PASSWORD */
