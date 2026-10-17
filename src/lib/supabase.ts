@@ -41,3 +41,15 @@ export async function entwurfSenden(draftId: string, text: string): Promise<void
     throw new Error(body.fehler ?? `Senden fehlgeschlagen (${res.status})`);
   }
 }
+
+/** Startet sofort einen Durchlauf des Mail-Agenten. Gibt eine kurze Zusammenfassung zurück. */
+export async function mailsAbrufen(): Promise<string> {
+  const { data } = await supabase.auth.getSession();
+  const res = await fetch("/.netlify/functions/mail-agent-run", {
+    method: "POST",
+    headers: { authorization: `Bearer ${data.session?.access_token}` },
+  });
+  const body = (await res.json().catch(() => ({}))) as { ergebnis?: string; fehler?: string };
+  if (!res.ok) throw new Error(body.fehler ?? `Abrufen fehlgeschlagen (${res.status})`);
+  return body.ergebnis ?? "";
+}

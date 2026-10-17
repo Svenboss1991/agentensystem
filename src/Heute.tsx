@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { entwurfSenden, MARKEN, supabase, tagesbeginn, zeit, type Marke } from "./lib/supabase";
+import { entwurfSenden, mailsAbrufen, MARKEN, supabase, tagesbeginn, zeit, type Marke } from "./lib/supabase";
 
 interface Task {
   id: string;
@@ -61,6 +61,8 @@ export default function Heute() {
   const [postfaecher, setPostfaecher] = useState<Postfach[]>([]);
   const [zahlen, setZahlen] = useState<Zahlen | null>(null);
   const [laden, setLaden] = useState(true);
+  const [abruf, setAbruf] = useState<{ laeuft: boolean; meldung: string }>({ laeuft: false, meldung: "" });
+  const [stand, setStand] = useState<Date | null>(null);
 
   const neuLaden = useCallback(async () => {
     const gestern = tagesbeginn(1).toISOString();
@@ -116,6 +118,7 @@ export default function Heute() {
       proKategorie[k] = (proKategorie[k] ?? 0) + 1;
     }
     setZahlen({ eingang: proKategorie, gesendet: gesendet.count ?? 0 });
+    setStand(new Date());
     setLaden(false);
   }, []);
 
@@ -124,6 +127,17 @@ export default function Heute() {
     const timer = setInterval(neuLaden, 60_000);
     return () => clearInterval(timer);
   }, [neuLaden]);
+
+  async function aktualisieren() {
+    setAbruf({ laeuft: true, meldung: "" });
+    try {
+      const ergebnis = await mailsAbrufen();
+      setAbruf({ laeuft: false, meldung: `Abgerufen: ${ergebnis}` });
+    } catch (err) {
+      setAbruf({ laeuft: false, meldung: err instanceof Error ? err.message : String(err) });
+    }
+    await neuLaden();
+  }
 
   async function taskSetzen(id: string, status: "erledigt" | "verworfen") {
     await supabase.from("tasks").update({ status, erledigt_am: new Date().toISOString() }).eq("id", id);
@@ -150,13 +164,22 @@ export default function Heute() {
           <h1 className="text-3xl font-semibold">Heute</h1>
           <p className="text-stone-500">{datum}</p>
         </div>
-        <div className="flex gap-4 text-sm">
-          <button onClick={neuLaden} className="underline">
-            Aktualisieren
-          </button>
-          <button onClick={() => supabase.auth.signOut()} className="text-stone-500 underline">
-            Abmelden
-          </button>
+        <div className="flex flex-col items-end gap-1 text-sm">
+          <div className="flex gap-4">
+            <button
+              onClick={aktualisieren}
+              disabled={abruf.laeuft}
+              className="underline disabled:no-underline disabled:opacity-60"
+            >
+              {abruf.laeuft ? "Holt neue Mails …" : "Aktualisieren"}
+            </button>
+            <button onClick={() => supabase.auth.signOut()} className="text-stone-500 underline">
+              Abmelden
+            </button>
+          </div>
+          <p className="text-xs text-stone-400">
+            {abruf.meldung || (stand ? `Stand ${zeit(stand.toISOString())}` : "")}
+          </p>
         </div>
       </header>
 

@@ -1,10 +1,6 @@
-import { createClient } from "@supabase/supabase-js";
+import { json, kommtVonSven } from "../lib/auth.js";
 import { db, log, type AccountRow, type MessageRow } from "../lib/db.js";
-import { env } from "../lib/env.js";
 import { providerFor } from "../lib/providers/index.js";
-
-const json = (status: number, body: unknown) =>
-  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 /**
  * Versendet einen Entwurf, den Sven auf der Seite «Heute» freigegeben hat.
@@ -13,14 +9,7 @@ const json = (status: number, body: unknown) =>
 export default async (req: Request) => {
   if (req.method !== "POST") return json(405, { fehler: "Nur POST" });
 
-  const jwt = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
-  if (!jwt) return json(401, { fehler: "Nicht angemeldet" });
-  const asUser = createClient(env("SUPABASE_URL"), env("SUPABASE_ANON_KEY"), {
-    global: { headers: { authorization: `Bearer ${jwt}` } },
-    auth: { persistSession: false },
-  });
-  const { data: istSven } = await asUser.rpc("ist_sven");
-  if (istSven !== true) return json(403, { fehler: "Nur Sven darf senden" });
+  if (!(await kommtVonSven(req))) return json(403, { fehler: "Nur Sven darf senden" });
 
   const { draft_id, text } = (await req.json().catch(() => ({}))) as { draft_id?: string; text?: string };
   if (!draft_id) return json(400, { fehler: "draft_id fehlt" });
