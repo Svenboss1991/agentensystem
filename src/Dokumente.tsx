@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import BereichFilter from "./BereichFilter";
-import { BEREICHE, bereichLabel, supabase, type Bereich } from "./lib/supabase";
+import { BEREICHE, bereichLabel, funktion, supabase, type Bereich } from "./lib/supabase";
 import { Seite } from "./Seite";
 import { Karte, Knopf } from "./ui";
 
@@ -32,10 +32,96 @@ interface Dokument {
   firmen: { id: string; name: string } | null;
   kontakte: { id: string; name: string | null; email: string | null } | null;
   akten: { id: string; nummer: string } | null;
+  analyse: Analyse | null;
+  analyse_status: "laeuft" | "fertig" | "fehler" | null;
+  analyse_fehler: string | null;
+}
+
+interface Analyse {
+  zusammenfassung: string;
+  art: string | null;
+  anbieter: string | null;
+  nummer: string | null;
+  versichert: string | null;
+  praemie: { betrag: number | null; waehrung: string | null; intervall: string | null } | null;
+  beginn: string | null;
+  ende: string | null;
+  verlaengerung: string | null;
+  kuendigungsfrist: string | null;
+  kuendbar_bis: string | null;
+  gedeckt: { was: string; summe: string | null; selbstbehalt: string | null }[];
+  nicht_gedeckt: string[];
+  pflichten: string[];
+  pruefen: string[];
 }
 
 const FELDER =
-  "id, titel, typ, bereich, datei_pfad, datei_name, groesse, gueltig_bis, erinnern_am, notiz, erstellt_am, firmen(id, name), kontakte(id, name, email), akten(id, nummer)";
+  "id, titel, typ, bereich, datei_pfad, datei_name, groesse, gueltig_bis, erinnern_am, notiz, erstellt_am, analyse, analyse_status, analyse_fehler, firmen(id, name), kontakte(id, name, email), akten(id, nummer)";
+
+const praemieText = (p: Analyse["praemie"]) =>
+  p?.betrag != null ? `${p.waehrung ?? ""} ${p.betrag.toLocaleString("de-CH", { minimumFractionDigits: 2 })} ${p.intervall ?? ""}`.trim() : null;
+
+/** Claude liest Police oder Vertrag; danach ist die Analyse beim Dokument sichtbar. */
+async function analysieren(id: string): Promise<void> {
+  await funktion("dokument-analysieren", { dokument_id: id });
+}
+
+function AnalyseAnsicht({ a }: { a: Analyse }) {
+  const liste = (titel: string, punkte: string[], farbe = "") =>
+    punkte.length > 0 && (
+      <div className="mt-2">
+        <p className="text-xs font-medium uppercase tracking-wide text-stone-500">{titel}</p>
+        <ul className={`ml-4 list-disc ${farbe}`}>
+          {punkte.map((x, i) => (
+            <li key={i}>{x}</li>
+          ))}
+        </ul>
+      </div>
+    );
+  const zeile = (label: string, wert: string | null | undefined) =>
+    wert && (
+      <>
+        <dt className="text-stone-500">{label}</dt>
+        <dd>{wert}</dd>
+      </>
+    );
+  return (
+    <div className="mt-2 rounded bg-stone-50 p-3 text-sm">
+      <p>{a.zusammenfassung}</p>
+      <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
+        {zeile("Art", a.art)}
+        {zeile("Anbieter", a.anbieter)}
+        {zeile("Nummer", a.nummer)}
+        {zeile("Versichert", a.versichert)}
+        {zeile("Prämie / Kosten", praemieText(a.praemie))}
+        {zeile("Laufzeit", [a.beginn && datumKurz(a.beginn), a.ende && datumKurz(a.ende)].filter(Boolean).join(" – ") || null)}
+        {zeile("Verlängerung", a.verlaengerung)}
+        {zeile("Kündigungsfrist", a.kuendigungsfrist)}
+        {zeile("Kündbar bis", a.kuendbar_bis && datumKurz(a.kuendbar_bis))}
+      </dl>
+      {a.gedeckt.length > 0 && (
+        <div className="mt-2">
+          <p className="text-xs font-medium uppercase tracking-wide text-stone-500">Gedeckt</p>
+          <table className="mt-1 w-full text-xs">
+            <tbody>
+              {a.gedeckt.map((g, i) => (
+                <tr key={i} className="border-t border-stone-200 align-top">
+                  <td className="py-1 pr-2">{g.was}</td>
+                  <td className="py-1 pr-2 text-right tabular-nums">{g.summe ?? ""}</td>
+                  <td className="py-1 text-right text-stone-500">{g.selbstbehalt ? `SB ${g.selbstbehalt}` : ""}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {liste("Nicht gedeckt", a.nicht_gedeckt, "text-red-800")}
+      {liste("Deine Pflichten", a.pflichten)}
+      {liste("Zum Prüfen", a.pruefen, "text-amber-800")}
+      <p className="mt-2 text-xs text-stone-400">Zusammenfassung von Claude, keine Beratung. Massgebend ist das Dokument.</p>
+    </div>
+  );
+}
 
 async function oeffnen(d: Dokument) {
   const { data, error } = await supabase.storage.from("dokumente").createSignedUrl(d.datei_pfad, 300);
@@ -66,6 +152,8 @@ export function DokumenteListe({
 }) {
   const [liste, setListe] = useState<Dokument[]>([]);
   const [neu, setNeu] = useState(false);
+  const [offen, setOffen] = useState<string | null>(null);
+  const [analysiert, setAnalysiert] = useState<string | null>(null);
 
   const laden = useCallback(async () => {
     let q = supabase.from("dokumente").select(FELDER).order("erstellt_am", { ascending: false });
@@ -80,6 +168,18 @@ export function DokumenteListe({
     laden();
   }, [laden]);
 
+  async function starten(id: string) {
+    setAnalysiert(id);
+    try {
+      await analysieren(id);
+      setOffen(id);
+    } catch {
+      // Fehler steht danach beim Dokument.
+    }
+    setAnalysiert(null);
+    await laden();
+  }
+
   const sichtbar = filter ? liste.filter(filter) : liste;
   const allgemein = !firmaId && !kontaktId && !akteId;
 
@@ -91,9 +191,10 @@ export function DokumenteListe({
           kontaktId={kontaktId}
           akteId={akteId}
           bereich={bereich}
-          fertig={() => {
+          fertig={(id, typ) => {
             setNeu(false);
             laden();
+            if (id && (typ === "police" || typ === "vertrag")) starten(id);
           }}
         />
       ) : (
@@ -125,9 +226,30 @@ export function DokumenteListe({
                   </span>
                   {d.notiz && <span className="block text-xs text-stone-500">{d.notiz}</span>}
                 </button>
-                <button onClick={() => loeschen(d, laden)} className="text-xs text-stone-400 underline">
-                  löschen
-                </button>
+                <span className="flex gap-3 text-xs">
+                  {d.analyse_status === "fertig" ? (
+                    <button onClick={() => setOffen(offen === d.id ? null : d.id)} className="underline">
+                      {offen === d.id ? "Analyse schliessen" : "Analyse"}
+                    </button>
+                  ) : d.analyse_status === "laeuft" || analysiert === d.id ? (
+                    <span className="text-stone-500">wird analysiert …</span>
+                  ) : (
+                    <button onClick={() => starten(d.id)} className="underline">
+                      {d.analyse_status === "fehler" ? "nochmals analysieren" : "analysieren"}
+                    </button>
+                  )}
+                  <button onClick={() => loeschen(d, laden)} className="text-stone-400 underline">
+                    löschen
+                  </button>
+                </span>
+                {d.analyse_status === "fehler" && d.analyse_fehler && (
+                  <p className="w-full text-xs text-red-700">{d.analyse_fehler}</p>
+                )}
+                {offen === d.id && d.analyse && (
+                  <div className="w-full">
+                    <AnalyseAnsicht a={d.analyse} />
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -150,7 +272,7 @@ function Hochladen({
   kontaktId?: string;
   akteId?: string;
   bereich: Bereich;
-  fertig: () => void;
+  fertig: (id?: string, typ?: string) => void;
 }) {
   const [datei, setDatei] = useState<File | null>(null);
   const [titel, setTitel] = useState("");
@@ -179,7 +301,7 @@ function Hochladen({
     const pfad = `${crypto.randomUUID()}/${datei.name.replace(/[^\w.\-äöüÄÖÜ ]/g, "_")}`;
     const { error } = await supabase.storage.from("dokumente").upload(pfad, datei, { contentType: datei.type || undefined });
     if (error) return setStatus(error.message);
-    const { error: e2 } = await supabase.from("dokumente").insert({
+    const { data: neu, error: e2 } = await supabase.from("dokumente").insert({
       titel: titel || datei.name,
       typ,
       bereich,
@@ -193,9 +315,9 @@ function Hochladen({
       gueltig_bis: gueltigBis || null,
       erinnern_am: erinnern || null,
       notiz: notiz || null,
-    });
+    }).select("id").single();
     if (e2) return setStatus(e2.message);
-    fertig();
+    fertig(neu?.id, typ);
   }
 
   const feld = "rounded border border-stone-300 px-3 py-2 text-sm";
@@ -250,7 +372,7 @@ function Hochladen({
           <Knopf onClick={() => {}} typ="submit" primaer disabled={!datei || status === "Lädt hoch …"}>
             Speichern
           </Knopf>
-          <Knopf onClick={fertig}>Abbrechen</Knopf>
+          <Knopf onClick={() => fertig()}>Abbrechen</Knopf>
           {status && <span className="text-xs text-stone-600">{status}</span>}
         </div>
       </form>
@@ -286,6 +408,7 @@ export function DokumenteSeite() {
           className="min-w-0 flex-1 rounded border border-stone-300 px-3 py-1.5 text-sm"
         />
       </div>
+      <Versicherungen />
       <DokumenteListe
         bereich={bereich ?? "privat"}
         filter={(d) =>
@@ -295,5 +418,48 @@ export function DokumenteSeite() {
         }
       />
     </Seite>
+  );
+}
+
+/** Überblick über alle analysierten Policen: Art, Versicherer, Prämie, Kündbar bis. */
+function Versicherungen() {
+  const [policen, setPolicen] = useState<Dokument[]>([]);
+  useEffect(() => {
+    supabase
+      .from("dokumente")
+      .select(FELDER)
+      .eq("typ", "police")
+      .eq("analyse_status", "fertig")
+      .order("titel")
+      .then(({ data }) => setPolicen((data ?? []) as unknown as Dokument[]));
+  }, []);
+  if (!policen.length) return null;
+  return (
+    <div className="mb-6">
+      <h2 className="mb-2 text-lg font-semibold">Meine Versicherungen</h2>
+      <Karte>
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-xs text-stone-500">
+              <th className="pb-1 font-normal">Art</th>
+              <th className="pb-1 font-normal">Versicherer</th>
+              <th className="pb-1 text-right font-normal">Prämie</th>
+              <th className="pb-1 text-right font-normal">Kündbar bis</th>
+            </tr>
+          </thead>
+          <tbody>
+            {policen.map((d) => (
+              <tr key={d.id} className="border-t border-stone-100">
+                <td className="py-1.5 pr-2">{d.analyse?.art ?? d.titel}</td>
+                <td className="py-1.5 pr-2">{d.analyse?.anbieter ?? d.firmen?.name ?? ""}</td>
+                <td className="py-1.5 pr-2 text-right tabular-nums">{praemieText(d.analyse?.praemie ?? null) ?? ""}</td>
+                <td className="py-1.5 text-right">{d.analyse?.kuendbar_bis ? datumKurz(d.analyse.kuendbar_bis) : ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="mt-2 text-xs text-stone-400">Was genau gedeckt ist, siehst du unten bei der jeweiligen Police unter «Analyse».</p>
+      </Karte>
+    </div>
   );
 }
