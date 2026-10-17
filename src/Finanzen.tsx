@@ -71,9 +71,8 @@ export function analystenVon(p: PositionAuswertung): Analysten {
   const summe = kaufen + halten + verkaufen;
   const kursziel = typeof b.kursziel === "number" && b.kursziel > 0 ? b.kursziel : null;
   const potenzial = kursziel && p.kurs ? kursziel / p.kurs - 1 : null;
-  // Gewichtetes Urteil: Buy = 1, Hold = 0, Sell = −1.
-  const punkte = summe ? (kaufen - verkaufen) / summe : 0;
-  const urteil = !summe ? null : punkte >= 0.33 ? "Buy" : punkte <= -0.33 ? "Sell" : "Hold";
+  // Urteil = die grösste Gruppe; bei Gleichstand Hold.
+  const urteil = !summe ? null : kaufen > halten && kaufen > verkaufen ? "Buy" : verkaufen > halten && verkaufen > kaufen ? "Sell" : "Hold";
   return { kaufen, halten, verkaufen, summe, kursziel, potenzial, urteil };
 }
 
@@ -265,7 +264,7 @@ export function FinanzenSeite() {
         <p className="mt-4 text-xs leading-relaxed text-stone-400">
           «Gesamt» = Gewinn inkl. Dividenden im Verhältnis zu allem, was du gekauft hast. «p. a.» = Rendite pro Jahr unter
           Berücksichtigung, wann du gekauft, verkauft und Dividenden erhalten hast (XIRR). «Ø Kursziel» = durchschnittliches Kursziel
-          der Analysten, darunter der Abstand zum heutigen Kurs. Analysten: Anzahl Buy / Hold / Sell aus dem letzten Bericht des Agenten.
+          der Analysten, darunter der Abstand zum heutigen Kurs. Analysten: Anzahl Buy / Hold / Sell aus dem letzten Bericht des Agenten; das Wort oben ist die grösste Gruppe.
           Kein Rat zum Kaufen oder Verkaufen.
         </p>
       </Karte>
@@ -425,7 +424,9 @@ function PositionsZeile({ p, farbe: punkt, anteil }: { p: PositionAuswertung; fa
         {p.rendite.dividenden > 0 && <span className="block text-xs text-stone-400">davon Div. {geld(p.rendite.dividenden)}</span>}
       </td>
       <td className={`px-2 py-3 text-right tabular-nums ${farbe(p.rendite.renditeProzent)}`}>{prozent(p.rendite.renditeProzent)}</td>
-      <td className={`px-2 py-3 text-right tabular-nums ${farbe(p.rendite.xirr)}`}>{prozent(p.rendite.xirr)}</td>
+      <td className={`px-2 py-3 text-right tabular-nums ${farbe(p.rendite.xirr)}`}>
+        {p.rendite.xirr != null ? prozent(p.rendite.xirr) : <span className="text-xs text-stone-400" title="Weniger als 2 Wochen im Depot: Hochrechnung aufs Jahr wäre unsinnig">zu kurz</span>}
+      </td>
       <td className="px-2 py-3 text-right tabular-nums">
         {a.kursziel != null ? (
           <>
@@ -457,7 +458,9 @@ export function AnalystenBalken({ a }: { a: Analysten }) {
     <div className="w-44">
       <div className="mb-1 flex items-center justify-between gap-2">
         <span className={`rounded px-1.5 py-0.5 text-[11px] font-semibold ${URTEIL_STIL[a.urteil!]}`}>{a.urteil}</span>
-        <span className="text-[11px] text-stone-400">{a.summe} Analysten</span>
+        <span className="text-[11px] text-stone-400">
+          {a.urteil === "Buy" ? a.kaufen : a.urteil === "Sell" ? a.verkaufen : a.halten} von {a.summe} Analysten
+        </span>
       </div>
       <div className="flex h-1.5 overflow-hidden rounded-full bg-stone-100">
         <div className="bg-emerald-500" style={{ width: teil(a.kaufen) }} />
