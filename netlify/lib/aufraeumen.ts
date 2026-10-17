@@ -49,8 +49,7 @@ const G_KAT: Record<string, { titel: string; q: string }> = {
   allgemein: { titel: "Posteingang «Allgemein»", q: `category:primary ${G_SCHUTZ}` },
   sozial: { titel: "Soziale Netzwerke", q: `category:social ${G_SCHUTZ}` },
   foren: { titel: "Foren und Mailinglisten", q: `category:forums ${G_SCHUTZ}` },
-  updates: { titel: "Benachrichtigungen (Tab «Updates»), älter als 1 Jahr", q: `category:updates older_than:1y ${G_SCHUTZ}` },
-  gross: { titel: "Grosse Mails über 10 MB, älter als 2 Jahre", q: `larger:10M older_than:2y ${G_SCHUTZ}` },
+  updates: { titel: "Benachrichtigungen (Tab «Updates»)", q: `category:updates ${G_SCHUTZ}` },
   spam: { titel: "Spam", q: "in:spam" },
   // Wöchentlich (Montag): nur die Mails der letzten Woche.
   werbung_woche: { titel: "Werbung der letzten Woche", q: `category:promotions newer_than:8d ${G_SCHUTZ}` },
@@ -156,10 +155,10 @@ const H_KAT: Record<string, { titel: string; ordner: string; filter: () => strin
     ordner: "inbox",
     filter: () => `inferenceClassification eq 'focused' and ${H_SCHUTZ}`,
   },
-  alt_anhaenge: {
-    titel: "Mails mit Anhang, älter als 2 Jahre",
-    ordner: "inbox",
-    filter: () => `hasAttachments eq true and receivedDateTime lt ${vorTagen(730).toISOString()} and ${H_SCHUTZ}`,
+  archiv: {
+    titel: "Archiv",
+    ordner: "archive",
+    filter: () => H_SCHUTZ,
   },
   junk: { titel: "Junk-E-Mail", ordner: "junkemail", filter: () => `receivedDateTime lt ${new Date().toISOString()}` },
   sonstige_woche: {
