@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import type { Postfach } from "./Heute";
-import { MARKEN, oauthStarten, zeit } from "./lib/supabase";
+import { MARKEN, oauthStarten, supabase, zeit } from "./lib/supabase";
 import Aufraeumen from "./Aufraeumen";
 import { Abschnitt, Karte, Knopf } from "./ui";
 
 /** Status aller Postfächer; Gmail/Hotmail lassen sich hier verbinden. */
-export default function Postfaecher({ postfaecher }: { postfaecher: Postfach[] }) {
+export default function Postfaecher({ postfaecher, neuLaden }: { postfaecher: Postfach[]; neuLaden: () => void }) {
   const [meldung, setMeldung] = useState<{ ok: boolean; text: string } | null>(null);
   const [verbindet, setVerbindet] = useState<string | null>(null);
   const [aufraeumen, setAufraeumen] = useState<string | null>(null);
@@ -56,6 +56,19 @@ export default function Postfaecher({ postfaecher }: { postfaecher: Postfach[] }
                   <Knopf onClick={() => verbinden(p)} primaer disabled={verbindet === p.id}>
                     {verbindet === p.id ? "Öffnet …" : "Verbinden"}
                   </Knopf>
+                )}
+                {p.aktiv && (
+                  <label className="flex items-center gap-1 text-xs text-stone-500">
+                    <input
+                      type="checkbox"
+                      checked={p.auto_aufraeumen}
+                      onChange={async (e) => {
+                        await supabase.from("accounts").update({ auto_aufraeumen: e.target.checked }).eq("id", p.id);
+                        neuLaden();
+                      }}
+                    />
+                    automatisch aufräumen
+                  </label>
                 )}
                 {p.aktiv && aufraeumen !== p.id && <Knopf onClick={() => setAufraeumen(p.id)}>Aufräumen</Knopf>}
                 {p.aktiv && aufraeumen === p.id && (

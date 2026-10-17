@@ -13,6 +13,7 @@ import {
 import { AkteLink, AktenUebersicht, InAkteAblegen } from "./Akten";
 import { MAIL_FELDER, MailKopf, type Mail } from "./Mail";
 import Postfaecher from "./Postfaecher";
+import UnsichereAbsender from "./UnsichereAbsender";
 import { Abschnitt, Karte, Knopf, Marker } from "./ui";
 
 interface Task {
@@ -48,6 +49,7 @@ export interface Postfach {
   aktiv: boolean;
   sync_zuletzt: string | null;
   sync_fehler: string | null;
+  auto_aufraeumen: boolean;
 }
 
 interface Zahlen {
@@ -91,7 +93,7 @@ export default function Heute() {
         .eq("status", "verarbeitet")
         .order("empfangen_am", { ascending: false }),
       supabase.from("messages").select(MAIL_FELDER).eq("status", "fehler").order("empfangen_am", { ascending: false }),
-      supabase.from("accounts").select("id, adresse, provider, typ, marke, aktiv, sync_zuletzt, sync_fehler").order("adresse"),
+      supabase.from("accounts").select("id, adresse, provider, typ, marke, aktiv, sync_zuletzt, sync_fehler, auto_aufraeumen").order("adresse"),
       supabase
         .from("messages")
         .select("kategorie")
@@ -249,6 +251,8 @@ export default function Heute() {
 
           <AktenUebersicht version={stand} bereich={bereich} />
 
+          <UnsichereAbsender version={stand} />
+
           <Abschnitt
             nummer="✉"
             titel="Zum Lesen (privat, geschäftlich, unklar)"
@@ -291,7 +295,7 @@ export default function Heute() {
             </Abschnitt>
           )}
 
-          <Postfaecher postfaecher={postfaecher} />
+          <Postfaecher postfaecher={postfaecher} neuLaden={neuLaden} />
         </div>
       )}
     </main>

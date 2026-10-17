@@ -12,7 +12,7 @@ interface Absender {
   name: string | null;
   anzahl: number;
   beispiele: string[];
-  urteil: "muell" | "behalten";
+  urteil: "muell" | "behalten" | "unsicher";
   grund: string;
 }
 
@@ -53,7 +53,7 @@ export default function Aufraeumen({
   schliessen: () => void;
 }) {
   const t = TEXTE[anbieter];
-  const name = `${anbieter}-aufraeumen`;
+  const name = "aufraeumen";
   const fn = <T,>(body: Record<string, unknown>) => funktion<T>(name, { ...body, account_id: accountId });
   const [vorschau, setVorschau] = useState<Vorschau | null>(null);
   const [kategorie, setKategorie] = useState<string | null>(null);
@@ -166,7 +166,7 @@ export default function Aufraeumen({
           <p className="mb-2 font-medium">{titel}</p>
           {absender.length > 0 && (
             <p className="mb-2 text-xs text-stone-500">
-              Vorausgewählt ist, was Claude als Müll einstuft. Verschoben werden alle Mails dieser Absender in dieser
+              Vorausgewählt ist, was Claude als Müll einstuft. «Unsicher» entscheidest du. Verschoben werden alle Mails dieser Absender in dieser
               Kategorie, nicht nur die gezählten aus der Stichprobe.
             </p>
           )}
@@ -180,8 +180,12 @@ export default function Aufraeumen({
                   <span className="block truncate text-xs text-stone-500">{a.beispiele.join(" · ")}</span>
                 </span>
                 <span className="shrink-0 text-right text-xs">
-                  <span className={a.urteil === "muell" ? "text-stone-600" : "font-medium text-green-700"}>
-                    {a.urteil === "muell" ? "Müll" : "behalten"}
+                  <span
+                    className={
+                      a.urteil === "muell" ? "text-stone-600" : a.urteil === "behalten" ? "font-medium text-green-700" : "font-medium text-amber-700"
+                    }
+                  >
+                    {a.urteil === "muell" ? "Müll" : a.urteil === "behalten" ? "behalten" : "unsicher"}
                   </span>
                   <span className="block text-stone-400">{a.grund}</span>
                   <span className="block tabular-nums text-stone-400">{a.anzahl}×</span>
