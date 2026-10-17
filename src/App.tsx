@@ -1,11 +1,22 @@
 import type { Session } from "@supabase/supabase-js";
 import { useEffect, useState } from "react";
 import { supabase } from "./lib/supabase";
+import { AkteSeite, AktenSeite } from "./Akten";
 import Heute from "./Heute";
 
 export default function App() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
   const [istSven, setIstSven] = useState<boolean | undefined>(undefined);
+  const [hash, setHash] = useState(window.location.hash);
+
+  useEffect(() => {
+    const aenderung = () => {
+      setHash(window.location.hash);
+      window.scrollTo(0, 0);
+    };
+    window.addEventListener("hashchange", aenderung);
+    return () => window.removeEventListener("hashchange", aenderung);
+  }, []);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -35,6 +46,9 @@ export default function App() {
       </Rahmen>
     );
   }
+  const akte = hash.match(/^#\/akte\/([\w-]+)/);
+  if (akte) return <AkteSeite key={akte[1]} id={akte[1]} />;
+  if (hash.startsWith("#/akten")) return <AktenSeite />;
   return <Heute />;
 }
 

@@ -73,13 +73,11 @@ export async function log(agent: Agent, aktion: string, ziel: string | null, erg
   if (error) console.error("agent_log fehlgeschlagen:", error.message);
 }
 
-export interface PendenzRow {
+export interface AkteRow {
   id: string;
+  nummer: string;
   titel: string;
   gegenpartei: string | null;
-  gegenpartei_adresse: string | null;
-  worauf: string | null;
-  seit: string;
-  wiedervorlage_am: string;
-  thread_message_ids: string[];
+  am_zug: "gegenseite" | "sven";
+  wiedervorlage_am: string | null;
 }

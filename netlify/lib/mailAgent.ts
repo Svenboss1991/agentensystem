@@ -1,11 +1,11 @@
-import { ausgangPruefen, einordnen, entwerfen, istZeitproblem, type Einordnung, type PendenzKurz } from "./claude.js";
-import { db, log, type AccountRow, type Agent, type Kategorie, type MessageRow, type PendenzRow } from "./db.js";
+import { ausgangPruefen, einordnen, entwerfen, istZeitproblem, type AkteKurz, type AkteZuordnung, type Einordnung } from "./claude.js";
+import { db, log, type AccountRow, type AkteRow, type Agent, type Kategorie, type Marke, type MessageRow } from "./db.js";
 import { envOptional } from "./env.js";
 import { providerFor } from "./providers/index.js";
 import type { FetchResult, IncomingMail } from "./providers/types.js";
 
 const START_TAGE = Number(envOptional("MAIL_START_TAGE") ?? 3);
-// Gesendete Mails beim ersten Mal weiter zurück lesen, damit laufende Anfragen als Pendenz auftauchen.
+// Gesendete Mails beim ersten Mal weiter zurück lesen, damit laufende Anfragen als Akte auftauchen.
 const START_TAGE_GESENDET = Number(envOptional("MAIL_START_TAGE_GESENDET") ?? 14);
 const MAX_PRO_POSTFACH = Number(envOptional("MAIL_MAX_PRO_LAUF") ?? 20);
 // Mails, die pro Lauf gleichzeitig eingeordnet werden. Ein Lauf hat höchstens 30 Sekunden.
@@ -73,7 +73,7 @@ async function abholen(account: AccountRow): Promise<number> {
   );
   const neu = await speichern(account, eingang.mails, "eingehend");
 
-  // Gesendete Mails sind für Pendenzen da. Ein Fehler hier soll den Posteingang nicht blockieren.
+  // Gesendete Mails sind für die Akten da. Ein Fehler hier soll den Posteingang nicht blockieren.
   let gesendet: FetchResult = { mails: [], sync: {} };
   try {
     gesendet = await mitZeitlimit(
@@ -95,7 +95,7 @@ async function abholen(account: AccountRow): Promise<number> {
   return neu;
 }
 
-// ─── Schritt 2: einordnen, zuteilen, Entwürfe, Aufgaben, Pendenzen ───────────
+// ─── Schritt 2: einordnen, zuteilen, Entwürfe, Aufgaben, Akten ───────────────
 
 function alsMail(row: MessageRow): IncomingMail {
   return {
@@ -119,28 +119,106 @@ const ersteAdresse = (s: string | null) => s?.match(/[\w.+-]+@[\w.-]+\.\w+/)?.[0
 const fadenIds = (row: MessageRow) =>
   [row.in_reply_to, ...(row.references_header?.split(/\s+/) ?? [])].filter((x): x is string => !!x);
 
-async function offenePendenzen(): Promise<PendenzRow[]> {
+async function offeneAkten(): Promise<AkteRow[]> {
   const { data } = await db()
-    .from("pendenzen")
-    .select("id, titel, gegenpartei, gegenpartei_adresse, worauf, seit, wiedervorlage_am, thread_message_ids")
+    .from("akten")
+    .select("id, nummer, titel, gegenpartei, am_zug, wiedervorlage_am")
     .eq("status", "offen")
-    .order("erstellt_am", { ascending: false })
-    .limit(30);
-  return (data ?? []) as PendenzRow[];
+    .order("zuletzt_aktiv", { ascending: false })
+    .limit(40);
+  return (data ?? []) as AkteRow[];
 }
 
-/** Pendenz im selben Mail-Faden, falls vorhanden. */
-const imFaden = (pendenzen: PendenzRow[], row: MessageRow) => {
+/** Akte einer früheren Mail im selben Faden (Antwort-Header oder Gmail-/Outlook-Konversation). */
+async function akteImFaden(row: MessageRow): Promise<string | null> {
   const ids = fadenIds(row);
-  return pendenzen.find((p) => p.thread_message_ids.some((t) => ids.includes(t)));
-};
+  const bedingungen = [
+    ids.length ? `message_id_header.in.(${ids.map((i) => `"${i.replace(/"/g, "")}"`).join(",")})` : null,
+    row.thread_ref ? `thread_ref.eq."${row.thread_ref.replace(/"/g, "")}"` : null,
+  ].filter(Boolean);
+  if (!bedingungen.length) return null;
+  const { data } = await db()
+    .from("messages")
+    .select("akte_id")
+    .not("akte_id", "is", null)
+    .neq("id", row.id)
+    .or(bedingungen.join(","))
+    .limit(1);
+  return (data?.[0]?.akte_id as string | undefined) ?? null;
+}
 
-async function nachfassAufgabenSchliessen(pendenzId: string): Promise<void> {
+async function kandidaten(row: MessageRow): Promise<AkteKurz[]> {
+  const [akten, faden] = await Promise.all([offeneAkten(), akteImFaden(row)]);
+  return akten.map((a) => ({ ...a, imFaden: a.id === faden }));
+}
+
+async function ereignis(akteId: string, text: string): Promise<void> {
+  await db().from("akte_eintraege").insert({ akte_id: akteId, typ: "ereignis", text, von: "mail" });
+}
+
+async function akteAufgabenSchliessen(akteId: string): Promise<void> {
   await db()
     .from("tasks")
     .update({ status: "erledigt", erledigt_am: new Date().toISOString() })
-    .eq("pendenz_id", pendenzId)
+    .eq("akte_id", akteId)
     .eq("status", "offen");
+}
+
+/** Mail einer Akte zuordnen (oder eine neue eröffnen) und den Stand der Akte nachführen. Gibt die Akte-ID zurück. */
+async function akteNachfuehren(
+  row: MessageRow,
+  z: AkteZuordnung,
+  gegenparteiAdresse: string | null,
+  marke: Marke | null,
+): Promise<string | null> {
+  const ausgehend = row.richtung === "ausgehend";
+  let akteId = z.akte_id;
+
+  if (!akteId && z.neue_akte) {
+    const n = z.neue_akte;
+    const { data, error } = await db()
+      .from("akten")
+      .insert({
+        titel: n.titel,
+        gegenpartei: n.gegenpartei,
+        gegenpartei_adresse: gegenparteiAdresse,
+        am_zug: n.am_zug,
+        wiedervorlage_am: n.am_zug === "gegenseite" && istDatum(n.wiedervorlage_am) ? n.wiedervorlage_am : null,
+        seit: row.empfangen_am?.slice(0, 10) ?? heute(),
+        message_id: row.id,
+        marke,
+      })
+      .select("id, nummer")
+      .single();
+    if (error) throw new Error(`Akte anlegen: ${error.message}`);
+    akteId = data.id as string;
+    await ereignis(akteId, `Akte eröffnet (${ausgehend ? "gesendete" : "eingegangene"} Mail «${row.betreff ?? ""}»)`);
+    await log("mail", "akte_eroeffnet", akteId, `${data.nummer} ${n.titel}`);
+  }
+  if (!akteId) return null;
+
+  await db().from("messages").update({ akte_id: akteId }).eq("id", row.id);
+  const jetzt = new Date().toISOString();
+  const aenderung: Record<string, unknown> = { zuletzt_aktiv: jetzt };
+
+  if (z.aenderung === "erledigt") {
+    Object.assign(aenderung, { status: "erledigt", erledigt_am: jetzt });
+    await akteAufgabenSchliessen(akteId);
+    await ereignis(akteId, "Als erledigt markiert");
+  } else if (z.aenderung === "sven_am_zug") {
+    Object.assign(aenderung, { am_zug: "sven", erinnert_am: null });
+    await ereignis(akteId, "Sven ist am Zug");
+  } else if (z.aenderung === "gegenseite_am_zug" || ausgehend) {
+    // Sven hat gehandelt (gesendet) oder wartet wieder: offene Aufgaben dieser Akte sind damit erledigt.
+    Object.assign(aenderung, { am_zug: "gegenseite", erinnert_am: null });
+    if (istDatum(z.wiedervorlage_am)) aenderung.wiedervorlage_am = z.wiedervorlage_am;
+    await akteAufgabenSchliessen(akteId);
+    if (z.aenderung === "gegenseite_am_zug") {
+      await ereignis(akteId, `Warten auf Gegenseite${istDatum(z.wiedervorlage_am) ? `, Wiedervorlage ${z.wiedervorlage_am}` : ""}`);
+    }
+  }
+  await db().from("akten").update(aenderung).eq("id", akteId);
+  return akteId;
 }
 
 async function entwurfAnlegen(row: MessageRow, account: AccountRow, e: Einordnung, frist: number): Promise<void> {
@@ -171,14 +249,8 @@ async function entwurfAnlegen(row: MessageRow, account: AccountRow, e: Einordnun
 }
 
 async function eingangVerarbeiten(row: MessageRow, account: AccountRow, frist: number): Promise<void> {
-  const pendenzen = await offenePendenzen();
-  const faden = imFaden(pendenzen, row);
-  const kandidaten: PendenzKurz[] = pendenzen.map((p) => ({
-    ...p,
-    titel: p.id === faden?.id ? `${p.titel} (gleicher Mail-Faden)` : p.titel,
-  }));
-
-  const e = await einordnen(alsMail(row), account, kandidaten, heute(), frist);
+  const akten = await kandidaten(row);
+  const e = await einordnen(alsMail(row), account, akten, heute(), frist);
   const zugewiesen = ZUTEILUNG[e.kategorie];
 
   await db()
@@ -193,35 +265,14 @@ async function eingangVerarbeiten(row: MessageRow, account: AccountRow, frist: n
     .eq("id", row.id);
   await log("mail", "eingeordnet", row.id, `${e.kategorie} → ${zugewiesen} (${e.marke}, ${e.sprache})`);
 
-  if (e.pendenz_erledigt_id) {
-    await db()
-      .from("pendenzen")
-      .update({ status: "erledigt", erledigt_am: new Date().toISOString(), antwort_message_id: row.id })
-      .eq("id", e.pendenz_erledigt_id)
-      .eq("status", "offen");
-    await nachfassAufgabenSchliessen(e.pendenz_erledigt_id);
-    await log("mail", "pendenz_erledigt", e.pendenz_erledigt_id, `Antwort von ${row.absender}`);
-  }
-
-  if (e.neue_pendenz && istDatum(e.neue_pendenz.wiedervorlage_am)) {
-    await db().from("pendenzen").insert({
-      titel: e.neue_pendenz.titel,
-      gegenpartei: e.neue_pendenz.gegenpartei,
-      gegenpartei_adresse: row.absender.toLowerCase(),
-      worauf: e.neue_pendenz.worauf,
-      wiedervorlage_am: e.neue_pendenz.wiedervorlage_am,
-      message_id: row.id,
-      thread_message_ids: [row.message_id_header, ...fadenIds(row)].filter(Boolean),
-    });
-    await log("mail", "pendenz_angelegt", row.id, `${e.neue_pendenz.titel} bis ${e.neue_pendenz.wiedervorlage_am}`);
-  }
-
   if (e.kategorie === "newsletter") {
     if (ARCHIV_IM_POSTFACH) await providerFor(account).archive(account, row.extern_id);
     await db().from("messages").update({ status: "archiviert" }).eq("id", row.id);
     await log("mail", "archiviert", row.id, ARCHIV_IM_POSTFACH ? "auch im Postfach" : "nur in der Datenbank");
     return;
   }
+
+  const akteId = await akteNachfuehren(row, e.akte, row.absender.toLowerCase(), e.marke === "keine" ? null : e.marke);
 
   const brauchtEntwurf = (e.kategorie === "service" || e.kategorie === "geschäftlich") && e.antwort_noetig;
   if (brauchtEntwurf) await entwurfAnlegen(row, account, e, frist);
@@ -234,6 +285,7 @@ async function eingangVerarbeiten(row: MessageRow, account: AccountRow, frist: n
       grund: e.aufgabe_grund ?? e.zusammenfassung,
       quelle: "mail",
       message_id: row.id,
+      akte_id: akteId,
       faellig_am: istDatum(e.faellig_am) ? e.faellig_am : null,
     });
     await log("mail", "aufgabe_angelegt", row.id, e.aufgabe_titel);
@@ -243,36 +295,9 @@ async function eingangVerarbeiten(row: MessageRow, account: AccountRow, frist: n
 }
 
 async function ausgangVerarbeiten(row: MessageRow, account: AccountRow, frist: number): Promise<void> {
-  const pendenzen = await offenePendenzen();
-  const faden = imFaden(pendenzen, row);
-  const a = await ausgangPruefen(alsMail(row), account, heute(), frist);
-
-  if (faden) {
-    // Sven hat im selben Faden nachgefasst: Pendenz weiterführen statt verdoppeln.
-    await db()
-      .from("pendenzen")
-      .update({
-        thread_message_ids: [...faden.thread_message_ids, row.message_id_header].filter(Boolean),
-        wiedervorlage_am: a.wartet_auf_antwort && istDatum(a.wiedervorlage_am) ? a.wiedervorlage_am : faden.wiedervorlage_am,
-        erinnert_am: null,
-      })
-      .eq("id", faden.id);
-    await nachfassAufgabenSchliessen(faden.id);
-    await log("mail", "pendenz_nachgefasst", faden.id, row.betreff ?? "");
-  } else if (a.wartet_auf_antwort && a.titel && istDatum(a.wiedervorlage_am)) {
-    await db().from("pendenzen").insert({
-      titel: a.titel,
-      gegenpartei: a.gegenpartei,
-      gegenpartei_adresse: ersteAdresse(row.empfaenger),
-      worauf: a.worauf,
-      seit: row.empfangen_am?.slice(0, 10) ?? heute(),
-      wiedervorlage_am: a.wiedervorlage_am,
-      message_id: row.id,
-      thread_message_ids: [row.message_id_header, ...fadenIds(row)].filter(Boolean),
-    });
-    await log("mail", "pendenz_angelegt", row.id, `${a.titel} bis ${a.wiedervorlage_am}`);
-  }
-
+  const akten = await kandidaten(row);
+  const z = await ausgangPruefen(alsMail(row), account, akten, heute(), frist);
+  await akteNachfuehren(row, z, ersteAdresse(row.empfaenger), account.marke === "keine" ? null : account.marke);
   await db().from("messages").update({ status: "verarbeitet", fehler: null }).eq("id", row.id);
 }
 
@@ -330,26 +355,28 @@ async function offeneVerarbeiten(
   return { ok, fehler };
 }
 
-// ─── Schritt 3: fällige Pendenzen → Nachfass-Aufgabe ─────────────────────────
+// ─── Schritt 3: fällige Akten → Nachfass-Aufgabe ─────────────────────────────
 
 /** Sven-Regel: Solange er nur wartet, keine Erinnerung. Erst wenn die Wiedervorlage erreicht ist, muss er handeln. */
-async function faelligePendenzen(): Promise<number> {
+async function faelligeAkten(): Promise<number> {
   const { data } = await db()
-    .from("pendenzen")
-    .select("id, titel, gegenpartei, worauf, seit, wiedervorlage_am")
+    .from("akten")
+    .select("id, nummer, titel, gegenpartei, worauf, seit, wiedervorlage_am")
     .eq("status", "offen")
+    .eq("am_zug", "gegenseite")
     .is("erinnert_am", null)
     .lte("wiedervorlage_am", heute());
-  for (const p of data ?? []) {
+  for (const a of data ?? []) {
     await db().from("tasks").insert({
-      titel: `Nachfassen: ${p.titel}`,
-      grund: `Seit ${p.seit} keine Antwort${p.gegenpartei ? ` von ${p.gegenpartei}` : ""}. Erwartet: ${p.worauf ?? "Rückmeldung"}.`,
+      titel: `Nachfassen: ${a.titel}`,
+      grund: `${a.nummer}: seit ${a.seit} keine Antwort${a.gegenpartei ? ` von ${a.gegenpartei}` : ""}.`,
       quelle: "mail",
-      pendenz_id: p.id,
-      faellig_am: p.wiedervorlage_am,
+      akte_id: a.id,
+      faellig_am: a.wiedervorlage_am,
     });
-    await db().from("pendenzen").update({ erinnert_am: new Date().toISOString() }).eq("id", p.id);
-    await log("mail", "pendenz_faellig", p.id, p.titel);
+    await db().from("akten").update({ erinnert_am: new Date().toISOString() }).eq("id", a.id);
+    await ereignis(a.id, "Wiedervorlage erreicht, Nachfassen als Aufgabe gestellt");
+    await log("mail", "akte_faellig", a.id, `${a.nummer} ${a.titel}`);
   }
   return data?.length ?? 0;
 }
@@ -378,7 +405,7 @@ export async function mailAgentLauf(frist: number): Promise<string> {
   );
   const neu = ergebnisse.reduce((a, b) => a + b, 0);
 
-  const faellig = await faelligePendenzen();
+  const faellig = await faelligeAkten();
   const { ok, fehler } = await offeneVerarbeiten(accounts, frist);
-  return `${neu} neu, ${ok} verarbeitet, ${fehler} Fehler${faellig ? `, ${faellig} Pendenzen fällig` : ""}`;
+  return `${neu} neu, ${ok} verarbeitet, ${fehler} Fehler${faellig ? `, ${faellig} Akten zur Wiedervorlage` : ""}`;
 }

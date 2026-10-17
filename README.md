@@ -19,7 +19,7 @@ Alle 5 Minuten (läuft im Netlify-Gratis-Abo; pro Lauf höchstens 30 Sekunden, d
 3. Zuteilen: `finanz` → Finanz-Agent, `service` → Service-Agent, `privat`/`unklar`/`geschäftlich` → Sven, `newsletter` → archiviert.
 4. Bei `service`/`geschäftlich` mit Antwortbedarf: Entwurf in `drafts`, bei EN/ES mit deutscher Übersetzung. Fakten nur aus **geprüften** Einträgen in `knowledge`, sonst Platzhalter `[…]`.
 5. Nur wenn Sven selbst handeln muss: Eintrag in `tasks`.
-6. **Pendenzen:** Der Agent liest auch die gesendeten Mails. Fragt Sven etwas an (Datenauskunft, Offerte, Bank …), entsteht eine Pendenz mit Wiedervorlage-Datum. Eine Antwort im selben Faden oder von derselben Gegenpartei erledigt sie. Ist die Wiedervorlage erreicht und keine Antwort da, entsteht die Aufgabe «Nachfassen: …». Pendenzen lassen sich auf «Heute» auch von Hand erfassen, verschieben und abhaken.
+6. **Akten:** Jede Angelegenheit, die nachverfolgt werden muss (Anfrage, Reklamation, Bank, Behörde …), bekommt eine Akte mit Fallnummer `F-<Jahr>-<Nr>`. Der Agent legt eingehende und gesendete Mails in die passende Akte (Mail-Faden oder Inhalt) und eröffnet neue Akten selbst. Jede Akte hat einen Verlauf (Mails, Notizen, Ereignisse), den Stand «ich warte» (mit Wiedervorlage) oder «ich bin dran». Ist die Wiedervorlage erreicht, entsteht die Aufgabe «Nachfassen: …». Ansicht: `#/akten` und `#/akte/<id>`.
 
 Grenzen: Der Agent sendet nie selbst. Gesendet wird nur über «Freigeben & senden» auf der Seite «Heute» (Funktion `send-draft` prüft, dass Svens Login dahintersteht). Nichts wird gelöscht; Newsletter werden höchstens ins Archiv verschoben (`MAIL_ARCHIV_IM_POSTFACH=true`). Jede Aktion steht in `agent_log`.
 

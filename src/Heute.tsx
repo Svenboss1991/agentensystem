@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { entwurfSenden, mailsAbrufen, MARKEN, supabase, tagesbeginn, zeit, type Marke } from "./lib/supabase";
-import Pendenzen from "./Pendenzen";
+import { AkteLink, AktenUebersicht, InAkteAblegen } from "./Akten";
+import { MAIL_FELDER, MailKopf, type Mail } from "./Mail";
 import Postfaecher from "./Postfaecher";
 import { Abschnitt, Karte, Knopf, Marker } from "./ui";
 
 interface Task {
   id: string;
+  akte_id: string | null;
+  akten: { nummer: string } | null;
   titel: string;
   grund: string | null;
   quelle: string;
@@ -13,20 +16,6 @@ interface Task {
   erstellt_am: string;
 }
 
-interface Mail {
-  id: string;
-  absender: string;
-  absender_name: string | null;
-  betreff: string | null;
-  text: string | null;
-  zusammenfassung: string | null;
-  kategorie: string | null;
-  marke: Marke | null;
-  sprache: string | null;
-  empfangen_am: string | null;
-  fehler: string | null;
-  accounts: { adresse: string } | null;
-}
 
 interface Draft {
   id: string;
@@ -55,8 +44,6 @@ interface Zahlen {
   gesendet: number;
 }
 
-const MAIL_FELDER =
-  "id, absender, absender_name, betreff, text, zusammenfassung, kategorie, marke, sprache, empfangen_am, fehler, accounts(adresse)";
 
 export default function Heute() {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -75,7 +62,7 @@ export default function Heute() {
     const [t, d, m, f, p, eingang, gesendet] = await Promise.all([
       supabase
         .from("tasks")
-        .select("id, titel, grund, quelle, faellig_am, erstellt_am")
+        .select("id, titel, grund, quelle, faellig_am, erstellt_am, akte_id, akten(nummer)")
         .eq("status", "offen")
         .eq("nur_wenn_sven_handeln_muss", true)
         .order("faellig_am", { ascending: true, nullsFirst: false })
@@ -107,7 +94,7 @@ export default function Heute() {
         .lt("gesendet_am", heute),
     ]);
 
-    setTasks((t.data ?? []) as Task[]);
+    setTasks((t.data ?? []) as unknown as Task[]);
     setDrafts((d.data ?? []) as unknown as Draft[]);
     // Mails mit offenem Entwurf erscheinen schon unter «Entwürfe», nicht doppelt zeigen.
     setFuerSven(
@@ -200,6 +187,7 @@ export default function Heute() {
                     <p className="font-medium">{t.titel}</p>
                     {t.grund && <p className="mt-1 text-sm text-stone-600">{t.grund}</p>}
                     <p className="mt-2 text-xs text-stone-400">
+                      {t.akte_id && t.akten && <AkteLink id={t.akte_id} nummer={t.akten.nummer} />}
                       {t.quelle}
                       {t.faellig_am && <span className="ml-2 font-medium text-red-700">fällig {t.faellig_am}</span>}
                     </p>
@@ -239,7 +227,7 @@ export default function Heute() {
             </Karte>
           </Abschnitt>
 
-          <Pendenzen version={stand} />
+          <AktenUebersicht version={stand} />
 
           <Abschnitt
             nummer="✉"
@@ -250,8 +238,13 @@ export default function Heute() {
             {fuerSven.map((m) => (
               <Karte key={m.id}>
                 <MailKopf mail={m} />
-                <div className="mt-3 flex gap-2">
+                <div className="mt-3 flex flex-wrap items-center gap-2">
                   <Knopf onClick={() => mailErledigt(m.id)}>Gelesen</Knopf>
+                  {m.akte_id ? (
+                    <span className="text-xs text-stone-500">in Akte abgelegt</span>
+                  ) : (
+                    <InAkteAblegen mail={m} fertig={neuLaden} />
+                  )}
                 </div>
               </Karte>
             ))}
@@ -352,23 +345,3 @@ function EntwurfKarte({ draft, fertig }: { draft: Draft; fertig: () => void }) {
   );
 }
 
-function MailKopf({ mail }: { mail: Mail }) {
-  return (
-    <div>
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="font-medium">{mail.betreff || "(ohne Betreff)"}</p>
-        <p className="text-xs text-stone-400">{zeit(mail.empfangen_am)}</p>
-      </div>
-      <p className="text-sm text-stone-600">
-        {mail.absender_name ? `${mail.absender_name} <${mail.absender}>` : mail.absender}
-      </p>
-      {mail.zusammenfassung && <p className="mt-2 text-sm">{mail.zusammenfassung}</p>}
-      <div className="mt-2 flex flex-wrap gap-1 text-xs">
-        {mail.kategorie && <Marker>{mail.kategorie}</Marker>}
-        {mail.marke && mail.marke !== "keine" && <Marker>{MARKEN[mail.marke]}</Marker>}
-        {mail.sprache && <Marker>{mail.sprache.toUpperCase()}</Marker>}
-        {mail.accounts && <Marker>{mail.accounts.adresse}</Marker>}
-      </div>
-    </div>
-  );
-}
