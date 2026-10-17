@@ -225,15 +225,16 @@ export function FinanzenSeite() {
 
         {positionen.length ? (
           <div className="-mx-4 overflow-x-auto">
-            <table className="w-full min-w-[54rem] text-sm">
+            <table className="w-full min-w-[60rem] text-sm">
               <thead>
                 <tr className="border-b border-stone-200 text-left text-[11px] uppercase tracking-wide text-stone-500">
                   <th className="px-4 pb-2 font-medium">Titel</th>
                   <th className="px-2 pb-2 text-right font-medium">Kurs</th>
                   <th className="px-2 pb-2 text-right font-medium">Wert</th>
-                  <th className="px-2 pb-2 text-right font-medium">Gewinn</th>
-                  <th className="px-2 pb-2 text-right font-medium">Gesamt</th>
+                  <th className="px-2 pb-2 text-right font-medium">Gewinn / Gesamt</th>
                   <th className="px-2 pb-2 text-right font-medium">p. a.</th>
+                  <th className="px-2 pb-2 text-right font-medium">KGV</th>
+                  <th className="px-2 pb-2 text-right font-medium">Div.-Rendite</th>
                   <th className="px-2 pb-2 text-right font-medium">Ø Kursziel</th>
                   <th className="px-4 pb-2 font-medium">Analysten</th>
                 </tr>
@@ -250,8 +251,9 @@ export function FinanzenSeite() {
                   <td />
                   <td className="px-2 py-3 text-right tabular-nums">{geld(depotGesamt)}</td>
                   <td className={`px-2 py-3 text-right tabular-nums ${farbe(depot.gewinn)}`}>{geld(depot.gewinn)}</td>
-                  <td />
                   <td className={`px-2 py-3 text-right tabular-nums ${farbe(depot.xirr)}`}>{prozent(depot.xirr)}</td>
+                  <td />
+                  <td />
                   <td className={`px-2 py-3 text-right tabular-nums ${farbe(potenzialGewichtet)}`}>{potenzialGewichtet != null ? prozent(potenzialGewichtet) : ""}</td>
                   <td />
                 </tr>
@@ -262,7 +264,7 @@ export function FinanzenSeite() {
           <p className="text-sm text-stone-500">Noch keine Positionen. Lade unten die Dateien von HSBC hoch.</p>
         )}
         <p className="mt-4 text-xs leading-relaxed text-stone-400">
-          «Gesamt» = Gewinn inkl. Dividenden im Verhältnis zu allem, was du gekauft hast. «p. a.» = Rendite pro Jahr unter
+          «KGV» = Kurs-Gewinn-Verhältnis, «Div.-Rendite» = Dividende pro Jahr im Verhältnis zum Kurs. «Gesamt» (unter dem Gewinn) = Gewinn inkl. Dividenden im Verhältnis zu allem, was du gekauft hast. «p. a.» = Rendite pro Jahr unter
           Berücksichtigung, wann du gekauft, verkauft und Dividenden erhalten hast (XIRR). «Ø Kursziel» = durchschnittliches Kursziel
           der Analysten, darunter der Abstand zum heutigen Kurs. Analysten: Anzahl Buy / Hold / Sell aus dem letzten Bericht des Agenten; das Wort oben ist die grösste Gruppe.
           Kein Rat zum Kaufen oder Verkaufen.
@@ -401,6 +403,9 @@ function Kennzahl({ titel, wert, klasse = "", hinweis }: { titel: string; wert: 
 
 function PositionsZeile({ p, farbe: punkt, anteil }: { p: PositionAuswertung; farbe: string; anteil: number }) {
   const a = analystenVon(p);
+  const b = (p.papier.bericht ?? {}) as Record<string, unknown>;
+  const kennzahl = (v: unknown, einheit: string) =>
+    typeof v === "number" && Number.isFinite(v) ? `${v.toLocaleString("de-CH", { maximumFractionDigits: 1 })}${einheit}` : <span className="text-stone-300">–</span>;
   return (
     <tr className="border-b border-stone-100 align-top hover:bg-stone-50">
       <td className="px-4 py-3">
@@ -421,12 +426,14 @@ function PositionsZeile({ p, farbe: punkt, anteil }: { p: PositionAuswertung; fa
       <td className="px-2 py-3 text-right font-medium tabular-nums">{geld(p.rendite.wert)}</td>
       <td className={`px-2 py-3 text-right tabular-nums ${farbe(p.rendite.gewinn)}`}>
         {geld(p.rendite.gewinn)}
+        <span className="block text-xs">{prozent(p.rendite.renditeProzent)}</span>
         {p.rendite.dividenden > 0 && <span className="block text-xs text-stone-400">davon Div. {geld(p.rendite.dividenden)}</span>}
       </td>
-      <td className={`px-2 py-3 text-right tabular-nums ${farbe(p.rendite.renditeProzent)}`}>{prozent(p.rendite.renditeProzent)}</td>
       <td className={`px-2 py-3 text-right tabular-nums ${farbe(p.rendite.xirr)}`}>
         {p.rendite.xirr != null ? prozent(p.rendite.xirr) : <span className="text-xs text-stone-400" title="Weniger als 2 Wochen im Depot: Hochrechnung aufs Jahr wäre unsinnig">zu kurz</span>}
       </td>
+      <td className="px-2 py-3 text-right tabular-nums">{kennzahl(b.kgv, "")}</td>
+      <td className="px-2 py-3 text-right tabular-nums">{kennzahl(b.dividendenrendite, " %")}</td>
       <td className="px-2 py-3 text-right tabular-nums">
         {a.kursziel != null ? (
           <>
@@ -536,7 +543,7 @@ function CashZeile({
           </button>
         )}
       </td>
-      <td colSpan={5} />
+      <td colSpan={6} />
     </tr>
   );
 }
