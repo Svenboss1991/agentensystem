@@ -17,11 +17,12 @@ export interface Mail {
   empfangen_am: string | null;
   fehler?: string | null;
   akte_id?: string | null;
+  kontakt_id?: string | null;
   accounts: { adresse: string } | null;
 }
 
 export const MAIL_FELDER =
-  "id, richtung, absender, absender_name, empfaenger, betreff, text, zusammenfassung, kategorie, marke, sprache, empfangen_am, fehler, akte_id, accounts(adresse)";
+  "id, richtung, absender, absender_name, empfaenger, betreff, text, zusammenfassung, kategorie, marke, sprache, empfangen_am, fehler, akte_id, kontakt_id, accounts(adresse)";
 
 /** Kopf einer Mail mit Zusammenfassung; «Mail öffnen» zeigt den ganzen Text. */
 export function MailKopf({ mail, offen: anfangsOffen = false }: { mail: Mail; offen?: boolean }) {
@@ -37,11 +38,17 @@ export function MailKopf({ mail, offen: anfangsOffen = false }: { mail: Mail; of
         <p className="text-xs text-stone-400">{zeit(mail.empfangen_am)}</p>
       </div>
       <p className="text-sm text-stone-600">
-        {ausgehend
-          ? `an ${mail.empfaenger ?? "?"}`
-          : mail.absender_name
-            ? `${mail.absender_name} <${mail.absender}>`
-            : mail.absender}
+        {mail.kontakt_id ? (
+          <a href={`#/kontakt/${mail.kontakt_id}`} className="underline decoration-stone-300 hover:decoration-stone-600">
+            {ausgehend ? `an ${mail.empfaenger ?? "?"}` : mail.absender_name ? `${mail.absender_name} <${mail.absender}>` : mail.absender}
+          </a>
+        ) : ausgehend ? (
+          `an ${mail.empfaenger ?? "?"}`
+        ) : mail.absender_name ? (
+          `${mail.absender_name} <${mail.absender}>`
+        ) : (
+          mail.absender
+        )}
       </p>
       {mail.zusammenfassung && <p className="mt-2 text-sm">{mail.zusammenfassung}</p>}
       <div className="mt-2 flex flex-wrap items-center gap-1 text-xs">

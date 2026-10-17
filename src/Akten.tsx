@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { MAIL_FELDER, MailKopf, type Mail } from "./Mail";
 import BereichFilter from "./BereichFilter";
 import { BEREICHE, bereichLabel, supabase, zeit, ZEITZONE, type Bereich } from "./lib/supabase";
+import { DokumenteListe } from "./Dokumente";
+import { Seite } from "./Seite";
 import { Abschnitt, Karte, Knopf, Marker } from "./ui";
 
 interface Akte {
@@ -485,6 +487,9 @@ export function AkteSeite({ id }: { id: string }) {
         )}
       </Karte>
 
+      <h2 className="mb-3 mt-8 text-lg font-semibold">Dokumente</h2>
+      <DokumenteListe akteId={id} bereich={akte.bereich} />
+
       <h2 className="mb-3 mt-8 text-lg font-semibold">Verlauf</h2>
       <form onSubmit={notizSpeichern} className="mb-4 flex gap-2">
         <input
@@ -533,17 +538,6 @@ export function AkteSeite({ id }: { id: string }) {
   );
 }
 
-function Seite({ titel, children }: { titel: string; children: React.ReactNode }) {
-  return (
-    <main className="mx-auto max-w-3xl px-4 py-8">
-      <a href="#/" className="text-sm text-stone-500 underline">
-        ← Heute
-      </a>
-      <h1 className="mb-6 mt-2 text-3xl font-semibold">{titel}</h1>
-      {children}
-    </main>
-  );
-}
 
 function BereichWahl({ wert, setWert }: { wert: Bereich; setWert: (b: Bereich) => void }) {
   return (

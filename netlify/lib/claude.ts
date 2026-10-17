@@ -106,6 +106,14 @@ export const Einordnung = z.object({
   aufgabe_grund: z.string().nullable(),
   faellig_am: z.string().nullable().describe("YYYY-MM-DD, nur wenn eine Frist in der Mail steht"),
   akte: AkteZuordnung,
+  absender_details: z
+    .object({
+      firma: z.string().nullable().describe("Firma des Absenders, z. B. «HSBC», nicht die Mail-Domain"),
+      position: z.string().nullable(),
+      telefon: z.string().nullable().describe("Festnetz/Büro aus der Signatur, international formatiert"),
+      mobil: z.string().nullable(),
+    })
+    .describe("Nur Angaben, die eindeutig in der Signatur oder im Absender stehen; sonst null. Nichts erfinden."),
 });
 export type Einordnung = z.infer<typeof Einordnung>;
 

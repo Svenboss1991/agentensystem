@@ -223,6 +223,71 @@ async function akteNachfuehren(
   return akteId;
 }
 
+// ─── Adressbuch ──────────────────────────────────────────────────────────────
+
+const FREEMAIL = /^(gmail|googlemail|hotmail|outlook|live|msn|yahoo|ymail|icloud|me|mac|gmx|web|bluewin|hispeed|sunrise|proton|protonmail|aol|t-online|freenet)\./i;
+
+interface Details {
+  firma: string | null;
+  position: string | null;
+  telefon: string | null;
+  mobil: string | null;
+}
+
+async function firmaFinden(name: string | null, domain: string): Promise<string | null> {
+  const firmenDomain = domain && !FREEMAIL.test(domain) ? domain : null;
+  if (firmenDomain) {
+    const { data } = await db().from("firmen").select("id").contains("domains", [firmenDomain]).limit(1);
+    if (data?.[0]) return data[0].id as string;
+  }
+  const firmenName = name?.trim() || (firmenDomain ? firmenDomain.split(".")[0].replace(/^./, (c) => c.toUpperCase()) : null);
+  if (!firmenName) return null;
+  const { data: gleich } = await db().from("firmen").select("id, domains").ilike("name", firmenName).limit(1);
+  if (gleich?.[0]) {
+    const f = gleich[0] as { id: string; domains: string[] };
+    if (firmenDomain && !f.domains.includes(firmenDomain)) {
+      await db().from("firmen").update({ domains: [...f.domains, firmenDomain] }).eq("id", f.id);
+    }
+    return f.id;
+  }
+  const { data: neu } = await db()
+    .from("firmen")
+    .insert({ name: firmenName, domains: firmenDomain ? [firmenDomain] : [] })
+    .select("id")
+    .single();
+  return (neu?.id as string | undefined) ?? null;
+}
+
+/** Person im Adressbuch anlegen oder ergänzen und die Mail mit ihr verknüpfen. Svens eigene Angaben werden nie überschrieben. */
+async function kontaktErfassen(row: MessageRow, email: string | null, name: string | null, details: Details | null): Promise<void> {
+  if (!email?.includes("@")) return;
+  const adresse = email.toLowerCase();
+  const domain = adresse.split("@")[1];
+  const { data: vorhanden } = await db()
+    .from("kontakte")
+    .select("id, name, telefon, mobil, position, firma_id")
+    .eq("email", adresse)
+    .maybeSingle();
+
+  let id = vorhanden?.id as string | undefined;
+  const firmaId = vorhanden?.firma_id ?? (await firmaFinden(details?.firma ?? null, domain));
+  const ergaenzen = {
+    name: vorhanden?.name ?? name,
+    telefon: vorhanden?.telefon ?? details?.telefon ?? null,
+    mobil: vorhanden?.mobil ?? details?.mobil ?? null,
+    position: vorhanden?.position ?? details?.position ?? null,
+    firma_id: firmaId,
+    letzter_kontakt: row.empfangen_am ?? new Date().toISOString(),
+  };
+  if (id) {
+    await db().from("kontakte").update(ergaenzen).eq("id", id);
+  } else {
+    const { data } = await db().from("kontakte").insert({ email: adresse, ...ergaenzen }).select("id").single();
+    id = data?.id as string | undefined;
+  }
+  if (id) await db().from("messages").update({ kontakt_id: id }).eq("id", row.id);
+}
+
 async function entwurfAnlegen(row: MessageRow, account: AccountRow, e: Einordnung, frist: number): Promise<void> {
   // Bei einem Wiederholungslauf nicht doppelt entwerfen.
   const { count } = await db()
@@ -274,6 +339,7 @@ async function eingangVerarbeiten(row: MessageRow, account: AccountRow, frist: n
   }
 
   const akteId = await akteNachfuehren(row, e.akte, row.absender.toLowerCase(), e.marke === "keine" ? null : e.marke);
+  await kontaktErfassen(row, row.absender, row.absender_name, e.absender_details);
 
   const brauchtEntwurf = (e.kategorie === "service" || e.kategorie === "geschäftlich") && e.antwort_noetig;
   if (brauchtEntwurf) await entwurfAnlegen(row, account, e, frist);
@@ -299,6 +365,8 @@ async function ausgangVerarbeiten(row: MessageRow, account: AccountRow, frist: n
   const akten = await kandidaten(row);
   const z = await ausgangPruefen(alsMail(row), account, akten, heute(), frist);
   await akteNachfuehren(row, z, ersteAdresse(row.empfaenger), account.marke === "keine" ? null : account.marke);
+  const empfaengerName = row.empfaenger?.match(/^\s*"?([^"<]+?)"?\s*</)?.[1] ?? null;
+  await kontaktErfassen(row, ersteAdresse(row.empfaenger), empfaengerName, null);
   await db().from("messages").update({ status: "verarbeitet", fehler: null }).eq("id", row.id);
 }
 
@@ -378,6 +446,28 @@ async function faelligeAkten(): Promise<number> {
     await db().from("akten").update({ erinnert_am: new Date().toISOString() }).eq("id", a.id);
     await ereignis(a.id, "Wiedervorlage erreicht, Nachfassen als Aufgabe gestellt");
     await log("mail", "akte_faellig", a.id, `${a.nummer} ${a.titel}`);
+  }
+  return data?.length ?? 0;
+}
+
+// ─── Dokumente: Erinnerung (z. B. Kündigungsfrist) als Aufgabe ───────────────
+
+async function dokumentErinnerungen(): Promise<number> {
+  const { data } = await db()
+    .from("dokumente")
+    .select("id, titel, typ, gueltig_bis, erinnern_am, akte_id")
+    .is("erinnert_am", null)
+    .lte("erinnern_am", heute());
+  for (const d of data ?? []) {
+    await db().from("tasks").insert({
+      titel: `Dokument prüfen: ${d.titel}`,
+      grund: d.gueltig_bis ? `${d.typ}, gültig bis ${d.gueltig_bis}. Kündigen, verlängern oder erneuern?` : `Erinnerung zu ${d.typ}.`,
+      quelle: "mail",
+      dokument_id: d.id,
+      akte_id: d.akte_id,
+      faellig_am: d.erinnern_am,
+    });
+    await db().from("dokumente").update({ erinnert_am: new Date().toISOString() }).eq("id", d.id);
   }
   return data?.length ?? 0;
 }
@@ -504,7 +594,7 @@ export async function mailAgentLauf(frist: number): Promise<string> {
   );
   const neu = ergebnisse.reduce((a, b) => a + b, 0);
 
-  const faellig = await faelligeAkten();
+  const faellig = (await faelligeAkten()) + (await dokumentErinnerungen());
   const [{ ok, fehler }, abgelegt] = await Promise.all([offeneVerarbeiten(accounts, frist), ablegen(accounts)]);
-  return `${neu} neu, ${ok} verarbeitet, ${abgelegt} abgelegt, ${fehler} Fehler${faellig ? `, ${faellig} Akten zur Wiedervorlage` : ""}`;
+  return `${neu} neu, ${ok} verarbeitet, ${abgelegt} abgelegt, ${fehler} Fehler${faellig ? `, ${faellig} Erinnerungen` : ""}`;
 }

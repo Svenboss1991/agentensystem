@@ -13,6 +13,7 @@ import {
 import { AkteLink, AktenUebersicht, InAkteAblegen } from "./Akten";
 import { MAIL_FELDER, MailKopf, type Mail } from "./Mail";
 import Postfaecher from "./Postfaecher";
+import { Navigation } from "./Seite";
 import UnsichereAbsender from "./UnsichereAbsender";
 import { Abschnitt, Karte, Knopf, Marker } from "./ui";
 
@@ -169,6 +170,7 @@ export default function Heute() {
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-8">
+      <Navigation />
       <header className="mb-8 flex items-baseline justify-between gap-4">
         <div>
           <h1 className="text-3xl font-semibold">Heute</h1>

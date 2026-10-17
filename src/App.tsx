@@ -1,7 +1,9 @@
 import type { Session } from "@supabase/supabase-js";
 import { useEffect, useState } from "react";
 import { supabase } from "./lib/supabase";
+import { AdressbuchSeite, FirmaSeite, KontaktSeite } from "./Adressbuch";
 import { AkteSeite, AktenSeite } from "./Akten";
+import { DokumenteSeite } from "./Dokumente";
 import Heute from "./Heute";
 
 export default function App() {
@@ -49,6 +51,12 @@ export default function App() {
   const akte = hash.match(/^#\/akte\/([\w-]+)/);
   if (akte) return <AkteSeite key={akte[1]} id={akte[1]} />;
   if (hash.startsWith("#/akten")) return <AktenSeite />;
+  const kontakt = hash.match(/^#\/kontakt\/([\w-]+)/);
+  if (kontakt) return <KontaktSeite key={kontakt[1]} id={kontakt[1]} />;
+  const firma = hash.match(/^#\/firma\/([\w-]+)/);
+  if (firma) return <FirmaSeite key={firma[1]} id={firma[1]} />;
+  if (hash.startsWith("#/adressbuch")) return <AdressbuchSeite />;
+  if (hash.startsWith("#/dokumente")) return <DokumenteSeite />;
   return <Heute />;
 }
 
