@@ -1,6 +1,7 @@
 import readXlsxFile from "read-excel-file/browser";
 import { useCallback, useEffect, useState } from "react";
-import { depotLaden, geld, heute, hsbcImportieren, prozent, type Depot } from "./lib/finanzDaten";
+import Konten from "./Konten";
+import { depotLaden, geld, heute, hsbcImportieren, kontenLaden, prozent, type Depot, type Konto } from "./lib/finanzDaten";
 import type { Blatt } from "./lib/hsbcImport";
 import { zielRechnung } from "./lib/rendite";
 import { supabase, zeit } from "./lib/supabase";
@@ -49,15 +50,18 @@ export function FinanzenSeite() {
   const [limits, setLimits] = useState<Limit[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [meldung, setMeldung] = useState("");
+  const [konten, setKonten] = useState<Konto[]>([]);
 
   const laden = useCallback(async () => {
-    const [d, b, z, l, o] = await Promise.all([
+    const [d, b, z, l, o, k] = await Promise.all([
       depotLaden(),
       supabase.from("reports").select("zeitraum, inhalt").eq("agent", "finanz").order("erstellt_am", { ascending: false }).limit(1),
       supabase.from("finanz_ziele").select("titel, betrag, waehrung, bis").eq("aktiv", true).limit(1),
       supabase.from("kurs_limits").select("id, wertpapier_id, art, kurs, stueck, aktiv, ausgeloest_am, wertpapiere(emisora, kurs)").order("erstellt_am", { ascending: false }),
       supabase.from("depot_orders").select("folio, art, emisora, stueck, kurs, gueltig_bis, status"),
+      kontenLaden(),
     ]);
+    setKonten(k);
     setDepot(d);
     setBriefing((b.data?.[0] as { zeitraum: string; inhalt: Briefing } | undefined) ?? null);
     setZiel((z.data?.[0] as Ziel | undefined) ?? null);
@@ -87,16 +91,20 @@ export function FinanzenSeite() {
   if (!depot) return <Seite titel="Finanzen">Lädt …</Seite>;
 
   const jahre = ziel ? (Date.parse(ziel.bis) - Date.parse(heute())) / (365.25 * 86_400_000) : 0;
-  const z = ziel ? zielRechnung(depot.wert, ziel.betrag, jahre, depot.xirr) : null;
-  const fortschritt = ziel ? Math.min(1, depot.wert / ziel.betrag) : 0;
+  // Cash im Depot ist ein eigenes Konto (HSBC legt es nicht immer im Reporto an); darum hier nur die Positionen.
+  const depotGesamt = depot.wert;
+  const kontenSumme = konten.reduce((s, k) => s + k.saldo, 0);
+  const netto = depotGesamt + kontenSumme;
+  const z = ziel ? zielRechnung(netto, ziel.betrag, jahre, depot.xirr) : null;
+  const fortschritt = ziel ? Math.max(0, Math.min(1, netto / ziel.betrag)) : 0;
 
   return (
     <Seite titel="Finanzen">
       {/* Überblick */}
       <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Kennzahl titel="Depotwert" wert={geld(depot.wert)} />
-        <Kennzahl titel="Gewinn (inkl. Dividenden)" wert={geld(depot.gewinn)} klasse={farbe(depot.gewinn)} />
-        <Kennzahl titel="Dividenden erhalten" wert={geld(depot.dividenden)} />
+        <Kennzahl titel="Nettovermögen" wert={geld(netto)} hinweis="Depot + Konten − Kreditkarten" />
+        <Kennzahl titel="Depot (Positionen)" wert={geld(depotGesamt)} />
+        <Kennzahl titel="Gewinn Depot (inkl. Dividenden)" wert={geld(depot.gewinn)} klasse={farbe(depot.gewinn)} />
         <Kennzahl titel="Rendite pro Jahr (XIRR)" wert={prozent(depot.xirr)} klasse={farbe(depot.xirr)} hinweis="berücksichtigt, wann gekauft wurde" />
       </div>
 
@@ -113,7 +121,7 @@ export function FinanzenSeite() {
             <div className="h-full rounded-full bg-stone-800" style={{ width: `${(fortschritt * 100).toFixed(1)}%` }} />
           </div>
           <p className="mt-1 text-xs text-stone-500">
-            {(fortschritt * 100).toFixed(1)} % erreicht ({geld(depot.wert)})
+            {(fortschritt * 100).toFixed(1)} % erreicht ({geld(netto)} Nettovermögen)
           </p>
           <dl className="mt-3 grid gap-x-6 gap-y-1 text-sm sm:grid-cols-3">
             <div>
@@ -130,7 +138,7 @@ export function FinanzenSeite() {
             </div>
           </dl>
           <p className="mt-2 text-xs text-stone-400">
-            Nur Depot bei HSBC. Konten und Karten kommen im nächsten Schritt dazu. Rechnung, keine Beratung.
+            Nettovermögen aus Depot, Konten und Karten. Rendite für die Prognose: die des Depots. Rechnung, keine Beratung.
           </p>
         </Karte>
       )}
@@ -157,6 +165,12 @@ export function FinanzenSeite() {
           <p className="text-sm text-stone-500">Das erste Briefing kommt am nächsten Morgen um 8 Uhr, sobald Positionen importiert sind.</p>
         )}
       </Karte>
+
+      {/* Konten und Karten */}
+      <h2 className="mb-2 mt-8 text-lg font-semibold">Konten und Karten</h2>
+      <div className="flex flex-col gap-3">
+        <Konten konten={konten} depotCash={depot.cash} depotCashAm={depot.cashAm} neuLaden={laden} />
+      </div>
 
       {/* Positionen */}
       <h2 className="mb-2 mt-8 text-lg font-semibold">Positionen</h2>

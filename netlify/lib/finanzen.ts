@@ -280,3 +280,31 @@ Ziel: ${ziel?.[0] ? `${ziel[0].betrag} ${ziel[0].waehrung} bis ${ziel[0].bis}` :
   await log("finanz", "briefing", tag, b.titel);
   return "Briefing erstellt";
 }
+
+// ─── Kreditkarten: Erinnerung vor der Zahlungsfrist ──────────────────────────
+
+/** 3 Tage vor der Frist eine Aufgabe, einmal pro Frist. */
+export async function kreditkartenErinnern(): Promise<number> {
+  const grenze = new Date(Date.parse(`${heute()}T12:00:00Z`) + 3 * 86_400_000).toISOString().slice(0, 10);
+  const { data } = await db()
+    .from("konten")
+    .select("id, name, institut, saldo, waehrung, zahlung_bis, zahlung_erinnert_fuer")
+    .eq("typ", "kreditkarte")
+    .eq("aktiv", true)
+    .lt("saldo", 0)
+    .not("zahlung_bis", "is", null)
+    .lte("zahlung_bis", grenze);
+  let n = 0;
+  for (const k of data ?? []) {
+    if (k.zahlung_erinnert_fuer === k.zahlung_bis) continue;
+    await db().from("tasks").insert({
+      titel: `Kreditkarte bezahlen: ${k.institut} ${k.name}`,
+      grund: `Offen ${k.waehrung} ${Math.abs(Number(k.saldo)).toLocaleString("de-CH", { minimumFractionDigits: 2 })}, Frist ${k.zahlung_bis}. Betrag ggf. im Bankportal prüfen.`,
+      quelle: "finanz",
+      faellig_am: k.zahlung_bis,
+    });
+    await db().from("konten").update({ zahlung_erinnert_fuer: k.zahlung_bis }).eq("id", k.id);
+    n++;
+  }
+  return n;
+}

@@ -1,10 +1,11 @@
 import type { Config } from "@netlify/functions";
 import { log } from "../lib/db.js";
-import { berichteBatch, briefing, kurseUndLimits, ortszeit } from "../lib/finanzen.js";
+import { berichteBatch, briefing, kreditkartenErinnern, kurseUndLimits, ortszeit } from "../lib/finanzen.js";
 
 // Finanz-Agent, alle 10 Minuten:
 // - Kurse und Limits während der Börsenzeit (Mo–Fr 7:30–15:00, Svens Zeit) und einmal frühmorgens
 // - Berichte je Wertpapier über die Batch-Schnittstelle einreichen bzw. abholen (täglich neu)
+// - Kreditkarten: Erinnerung 3 Tage vor der Zahlungsfrist
 // - Briefing ab 7:50 Uhr, einmal pro Tag
 export default async () => {
   const start = Date.now();
@@ -18,6 +19,8 @@ export default async () => {
       meldungen.push(`${await kurseUndLimits()} Kurse`);
     }
     meldungen.push(await berichteBatch());
+    const karten = await kreditkartenErinnern();
+    if (karten) meldungen.push(`${karten} Kreditkarten-Erinnerungen`);
     if (minuten >= 7 * 60 + 50 && minuten < 12 * 60) meldungen.push(await briefing(start + 25_000));
     console.log("Finanzen:", meldungen.join(" · "));
   } catch (err) {

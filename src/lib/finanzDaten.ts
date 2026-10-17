@@ -185,6 +185,9 @@ export interface Depot {
   reportoZins: number;
   reportoSatz: number | null;
   reportoSeit: string | null;
+  /** Betrag des letzten Reportos (nur Hinweis; Cash im Depot ist ein eigenes Konto, da nicht immer im Reporto). */
+  cash: number;
+  cashAm: string | null;
   transaktionen: Tx[];
 }
 
@@ -247,6 +250,9 @@ export async function depotLaden(): Promise<Depot> {
   }
 
   const reporto = tx.filter((x) => x.typ === "reporto_ende");
+  const starts = tx.filter((x) => x.typ === "reporto_start");
+  const letzterTag = starts.length ? starts[starts.length - 1].datum : null;
+  const letzterReporto = starts.filter((x) => x.datum === letzterTag);
   const saetze = reporto.map((x) => Number(x.zinssatz)).filter((x) => x > 0);
   return {
     positionen: positionen.sort((a, b) => b.rendite.wert - a.rendite.wert),
@@ -257,6 +263,8 @@ export async function depotLaden(): Promise<Depot> {
     reportoZins: reporto.reduce((s, x) => s + Number(x.zins ?? 0), 0),
     reportoSatz: saetze.length ? saetze.reduce((a, b) => a + b, 0) / saetze.length : null,
     reportoSeit: reporto[0]?.datum ?? null,
+    cash: letzterReporto.reduce((s, x) => s + Number(x.betrag ?? 0), 0),
+    cashAm: letzterReporto[0]?.datum ?? null,
     transaktionen: tx,
   };
 }
@@ -268,3 +276,33 @@ export const geld = (n: number | null | undefined, w = "MXN", stellen = 0) =>
 
 export const prozent = (n: number | null | undefined, stellen = 1) =>
   n == null || !Number.isFinite(n) ? "–" : `${n > 0 ? "+" : ""}${(n * 100).toLocaleString("de-CH", { minimumFractionDigits: stellen, maximumFractionDigits: stellen })} %`;
+
+// ─── Konten und Karten ───────────────────────────────────────────────────────
+
+export interface Konto {
+  id: string;
+  name: string;
+  institut: string;
+  typ: "konto" | "sparen" | "festgeld" | "fonds" | "kreditkarte" | "kaution" | "sonstiges";
+  endziffern: string | null;
+  waehrung: string;
+  saldo: number;
+  saldo_am: string;
+  zinssatz: number | null;
+  zahlung_bis: string | null;
+  notiz: string | null;
+  aktiv: boolean;
+  sortierung: number;
+}
+
+export async function kontenLaden(): Promise<Konto[]> {
+  const { data } = await supabase.from("konten").select("*").eq("aktiv", true).order("institut").order("sortierung").order("name");
+  return ((data ?? []) as Konto[]).map((k) => ({ ...k, saldo: Number(k.saldo), zinssatz: k.zinssatz == null ? null : Number(k.zinssatz) }));
+}
+
+/** Saldo ändern und im Verlauf festhalten. */
+export async function saldoSetzen(konto: Konto, saldo: number): Promise<void> {
+  const tag = heute();
+  await supabase.from("konten").update({ saldo, saldo_am: tag }).eq("id", konto.id);
+  await supabase.from("konten_saldi").upsert({ konto_id: konto.id, datum: tag, saldo }, { onConflict: "konto_id,datum" });
+}
