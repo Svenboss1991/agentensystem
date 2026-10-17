@@ -12,6 +12,10 @@ function imapClient(account: AccountRow): ImapFlow {
     secure: true,
     auth: { user: account.benutzer ?? account.adresse, pass: secretFor(account.secret_ref, "PASSWORD") },
     logger: false,
+    // Kurze Zeitlimits: ein hängender Server soll einen Fehler melden, statt den ganzen Lauf zu blockieren.
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 20_000,
   });
 }
 

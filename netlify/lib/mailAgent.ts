@@ -21,9 +21,20 @@ const ZUTEILUNG: Record<Kategorie, Agent> = {
 
 // ─── Schritt 1: neue Mails holen und speichern ───────────────────────────────
 
+function mitZeitlimit<T>(p: Promise<T>, ms: number, was: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${was}: keine Antwort nach ${ms / 1000} s`)), ms)),
+  ]);
+}
+
 async function abholen(account: AccountRow): Promise<number> {
   const startDatum = new Date(Date.now() - START_TAGE * 86_400_000);
-  const { mails, sync } = await providerFor(account).fetchNew(account, startDatum, MAX_PRO_POSTFACH);
+  const { mails, sync } = await mitZeitlimit(
+    providerFor(account).fetchNew(account, startDatum, MAX_PRO_POSTFACH),
+    15_000,
+    `Postfach ${account.adresse}`,
+  );
 
   let neu = 0;
   if (mails.length > 0) {
