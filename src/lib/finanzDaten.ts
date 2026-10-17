@@ -18,6 +18,7 @@ export interface Wertpapier {
   bericht_am: string | null;
   bericht_fehler: string | null;
   notiz: string | null;
+  produkt: import("./produkt").Produkt | null;
 }
 
 export interface Tx {

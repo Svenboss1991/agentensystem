@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { LimitFormular } from "./Finanzen";
 import { depotLaden, geld, prozent, type PositionAuswertung, type Tx, type Wertpapier } from "./lib/finanzDaten";
+import { bereich, boosterAuszahlung, boosterSchwellen, erwarteteAuszahlung, wahrscheinlichkeitUnter, type Produkt } from "./lib/produkt";
 import { supabase, zeit } from "./lib/supabase";
 import { Seite } from "./Seite";
 import { Karte, Knopf } from "./ui";
@@ -112,6 +113,8 @@ export function WertpapierSeite({ id }: { id: string }) {
           </p>
         )}
       </Karte>
+
+      {papier.produkt && <ProduktKarte p={papier.produkt} stueck={pos?.stueck ?? 0} />}
 
       {/* Kennzahlen und Analysten */}
       <div className="mb-2 mt-8 flex flex-wrap items-baseline justify-between gap-2">
@@ -397,5 +400,112 @@ function Liste({ titel, punkte }: { titel: string; punkte?: string[] }) {
         ))}
       </ul>
     </Karte>
+  );
+}
+
+function ProduktKarte({ p, stueck }: { p: Produkt; stueck: number }) {
+  const kurs = p.basis_kurs ?? null;
+  const { hoechstAb, mindestUnter } = boosterSchwellen(p);
+  const jahre = Math.max(0, (Date.parse(`${p.stichtag}T20:00:00Z`) - Date.now()) / (365.25 * 86_400_000));
+  const sigma = 0.24; // angenommene Schwankung pro Jahr
+  const wert = (s: number) => boosterAuszahlung(p, s);
+  const grenzen = [mindestUnter, p.startkurs, ...(p.vergleich_schwelle ? [p.vergleich_schwelle] : []), hoechstAb];
+  const unter = (x: number) => (kurs ? wahrscheinlichkeitUnter(x, kurs, sigma, jahre) : null);
+  const zeilen: { bereich: string; auszahlung: string; w: number | null }[] = [
+    { bereich: `unter ${zahl(mindestUnter)}`, auszahlung: `${zahl(p.mindest, 0)} (Untergrenze)`, w: unter(mindestUnter) },
+    {
+      bereich: `${zahl(mindestUnter)} – ${zahl(p.startkurs)}`,
+      auszahlung: "Verlust 1:1 wie der Basiswert",
+      w: kurs ? (unter(p.startkurs)! - unter(mindestUnter)!) : null,
+    },
+    ...(p.vergleich_schwelle
+      ? [
+          {
+            bereich: `${zahl(p.startkurs)} – ${zahl(p.vergleich_schwelle)}`,
+            auszahlung: `Gewinn, aber unter ${p.vergleich_text ?? "Vergleich"}`,
+            w: kurs ? unter(p.vergleich_schwelle)! - unter(p.startkurs)! : null,
+          },
+          {
+            bereich: `${zahl(p.vergleich_schwelle)} – ${zahl(hoechstAb)}`,
+            auszahlung: `Zielbereich: ${p.partizipation * 100} % des Anstiegs`,
+            w: kurs ? unter(hoechstAb)! - unter(p.vergleich_schwelle)! : null,
+          },
+        ]
+      : [
+          {
+            bereich: `${zahl(p.startkurs)} – ${zahl(hoechstAb)}`,
+            auszahlung: `${p.partizipation * 100} % des Anstiegs`,
+            w: kurs ? unter(hoechstAb)! - unter(p.startkurs)! : null,
+          },
+        ]),
+    { bereich: `ab ${zahl(hoechstAb)}`, auszahlung: `${zahl(p.hoechst, 0)} (Maximum)`, w: kurs ? 1 - unter(hoechstAb)! : null },
+  ];
+
+  return (
+    <>
+      <h2 className="mb-2 mt-8 text-lg font-semibold">Produkt: {p.bezeichnung ?? "Strukturiertes Produkt"}</h2>
+      <Karte>
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm sm:grid-cols-4">
+          <Feld titel="Basiswert" wert={`${p.basiswert} (${p.basis_ticker})`} />
+          <Feld titel="Emittent" wert={p.emittent ?? "–"} />
+          <Feld titel="Startkurs" wert={`${zahl(p.startkurs)} ${p.basis_waehrung ?? ""}`} />
+          <Feld titel="Stichtag / Auszahlung" wert={`${datum(p.stichtag)} / ${datum(p.auszahlung)}`} />
+          <Feld titel="Kurs heute" wert={kurs ? `${zahl(kurs)} (${prozent(kurs / p.startkurs - 1)})` : "–"} />
+          <Feld titel="Bereich heute" wert={kurs ? bereich(p, kurs) : "–"} />
+          <Feld titel="Wert, wenn heute Stichtag wäre" wert={kurs ? `${zahl(wert(kurs))} pro Titel · ${geld(wert(kurs) * stueck)}` : "–"} />
+          <Feld
+            titel="Erwartungswert am Stichtag"
+            wert={kurs ? `${zahl(erwarteteAuszahlung(p, kurs, sigma, jahre))} · ${geld(erwarteteAuszahlung(p, kurs, sigma, jahre) * stueck)}` : "–"}
+          />
+        </dl>
+        <table className="mt-4 w-full text-sm">
+          <thead>
+            <tr className="text-left text-xs text-stone-500">
+              <th className="pb-1 font-normal">{p.basiswert} am Stichtag</th>
+              <th className="pb-1 font-normal">Auszahlung pro {p.nominal}</th>
+              <th className="pb-1 text-right font-normal">Wahrscheinlichkeit</th>
+            </tr>
+          </thead>
+          <tbody>
+            {zeilen.map((z) => (
+              <tr key={z.bereich} className="border-t border-stone-100">
+                <td className="py-1.5 pr-2 tabular-nums">{z.bereich}</td>
+                <td className="py-1.5 pr-2">{z.auszahlung}</td>
+                <td className="py-1.5 text-right tabular-nums">{z.w == null ? "–" : `${Math.round(z.w * 100)} %`}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="mt-2 text-xs text-stone-400">
+          Wahrscheinlichkeiten: einfaches Modell ohne Trend, Schwankung {Math.round(sigma * 100)} % pro Jahr, ab heutigem Kurs. Richtwerte,
+          entscheidend ist allein der Schlusskurs am Stichtag. Grenzen: {grenzen.map((g) => zahl(g)).join(" · ")}.
+          {p.basis_kurs_am && <> Kurs {p.basiswert} vom {zeit(p.basis_kurs_am)}.</>}
+        </p>
+        {!!p.termine?.length && (
+          <div className="mt-4">
+            <p className="mb-1 text-xs font-medium uppercase tracking-wide text-stone-500">Termine</p>
+            <ul className="text-sm">
+              {[...p.termine]
+                .sort((a, b) => a.datum.localeCompare(b.datum))
+                .map((t) => (
+                  <li key={t.datum + t.text} className={t.datum < new Date().toISOString().slice(0, 10) ? "text-stone-400" : ""}>
+                    <span className="mr-2 tabular-nums">{datum(t.datum)}</span>
+                    {t.text}
+                  </li>
+                ))}
+            </ul>
+          </div>
+        )}
+        {p.beschreibung && (
+          <div className="mt-4 flex flex-col gap-2 border-t border-stone-100 pt-3 text-sm">
+            {p.beschreibung.split(/\n\s*\n/).map((absatz, i) => (
+              <p key={i} className="whitespace-pre-line">
+                {absatz}
+              </p>
+            ))}
+          </div>
+        )}
+      </Karte>
+    </>
   );
 }

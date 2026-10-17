@@ -11,6 +11,21 @@ const ZEITZONE = "America/Bahia_Banderas";
 const MODEL = envOptional("CLAUDE_MODEL") ?? "claude-opus-5-5";
 const WARNSCHWELLE = 0.08; // ±8 % an einem Tag
 
+interface ProduktDaten {
+  basiswert?: string;
+  startkurs?: number;
+  stichtag?: string;
+  basis_kurs?: number;
+  termine?: { datum: string; text: string }[];
+}
+
+function produktZeile(w: Wertpapier): string | null {
+  const p = w.produkt as ProduktDaten | null;
+  if (!p?.startkurs) return null;
+  const naechster = (p.termine ?? []).filter((t) => t.datum >= heute()).sort((a, b) => a.datum.localeCompare(b.datum))[0];
+  return `  Strukturiertes Produkt auf ${p.basiswert}: Startkurs ${p.startkurs}, aktuell ${p.basis_kurs ?? "?"}, Stichtag ${p.stichtag}${naechster ? `, nächster Termin ${naechster.datum}: ${naechster.text}` : ""}`;
+}
+
 export interface Wertpapier {
   id: string;
   emisora: string;
@@ -24,6 +39,7 @@ export interface Wertpapier {
   bericht: Bericht | null;
   bericht_am: string | null;
   warnung_am: string | null;
+  produkt: unknown;
 }
 
 export const heute = () => new Intl.DateTimeFormat("en-CA", { timeZone: ZEITZONE }).format(new Date());
@@ -53,8 +69,24 @@ async function yahoo(ticker: string): Promise<{ kurs: number; vortag: number | n
   return { kurs: meta.regularMarketPrice, vortag: meta.previousClose ?? meta.chartPreviousClose ?? null };
 }
 
+/** Basiswerte strukturierter Produkte (z. B. Amazon bei der Booster-Note) nachführen. */
+async function basiswerte(): Promise<void> {
+  const { data } = await db().from("wertpapiere").select("id, produkt").not("produkt", "is", null);
+  for (const w of data ?? []) {
+    const p = w.produkt as { basis_ticker?: string } & Record<string, unknown>;
+    if (!p?.basis_ticker) continue;
+    const k = await yahoo(p.basis_ticker).catch(() => null);
+    if (!k) continue;
+    await db()
+      .from("wertpapiere")
+      .update({ produkt: { ...p, basis_kurs: k.kurs, basis_kurs_am: new Date().toISOString() } })
+      .eq("id", w.id);
+  }
+}
+
 /** Kurse holen, Limits prüfen, bei grossen Tagesbewegungen warnen. Gibt die Anzahl aktualisierter Kurse zurück. */
 export async function kurseUndLimits(): Promise<number> {
+  await basiswerte();
   const { data } = await db().from("wertpapiere").select("*").not("ticker", "is", null);
   let n = 0;
   for (const w of (data ?? []) as Wertpapier[]) {
@@ -159,7 +191,9 @@ function berichtAnfrage(w: Wertpapier): Anthropic.Messages.MessageCreateParamsNo
       {
         role: "user",
         content: sauber(
-          `Wertpapier: ${w.emisora}${w.name ? ` (${w.name})` : ""}, Typ: ${w.typ}, Börse: Bolsa Mexicana de Valores bzw. HSBC México${w.ticker ? `, Ticker ${w.ticker}` : ""}. Heute ist ${heute()}.`,
+          (w.produkt as ProduktDaten | null)?.basiswert
+            ? `Strukturiertes Produkt ${w.emisora} auf den Basiswert ${(w.produkt as ProduktDaten).basiswert}. Recherchiere den Basiswert (Kennzahlen, Analysten, nächste Quartalszahlen, News); unter «steuer» Hinweise zu strukturierten Produkten/Warrants für in Mexiko Ansässige. Heute ist ${heute()}.`
+            : `Wertpapier: ${w.emisora}${w.name ? ` (${w.name})` : ""}, Typ: ${w.typ}, Börse: Bolsa Mexicana de Valores bzw. HSBC México${w.ticker ? `, Ticker ${w.ticker}` : ""}. Heute ist ${heute()}.`,
         ),
       },
     ],
@@ -263,6 +297,7 @@ export async function briefing(frist: number): Promise<string> {
         b?.analysten_zusammenfassung ? `  Analysten: ${b.analysten_zusammenfassung}` : null,
         ...(b?.news ?? []).slice(0, 3).map((n) => `  News ${n.datum ?? ""}: ${n.titel}${n.bedeutung ? ` – ${n.bedeutung}` : ""}`),
         ...(limits ?? []).filter((l) => l.wertpapier_id === w.id).map((l) => `  Eigenes Limit: ${l.art} zu ${l.kurs}`),
+        produktZeile(w),
       ]
         .filter(Boolean)
         .join("\n");
