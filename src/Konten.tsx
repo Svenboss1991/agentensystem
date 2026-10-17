@@ -16,46 +16,33 @@ const TYPEN: Record<Konto["typ"], string> = {
 const datumKurz = (iso: string | null) => (iso ? new Date(`${iso}T12:00:00Z`).toLocaleDateString("de-CH", { timeZone: "UTC" }) : "");
 
 /** Konten und Karten mit Saldo (direkt änderbar), Zins und Zahlungsfrist. */
-export default function Konten({
-  konten,
-  depotCash,
-  depotCashAm,
-  neuLaden,
-}: {
-  konten: Konto[];
-  depotCash: number;
-  depotCashAm: string | null;
-  neuLaden: () => void;
-}) {
+export default function Konten({ konten, neuLaden }: { konten: Konto[]; neuLaden: () => void }) {
   const [neu, setNeu] = useState(false);
   const institute = [...new Set(konten.map((k) => k.institut))];
   const zinsenProJahr = konten.reduce((s, k) => s + (k.saldo > 0 && k.zinssatz ? (k.saldo * k.zinssatz) / 100 : 0), 0);
   const schulden = konten.filter((k) => k.saldo < 0).reduce((s, k) => s + k.saldo, 0);
 
   return (
-    <>
+    <div className="flex flex-col gap-3">
+      <div className="grid gap-3 md:grid-cols-2">
       {institute.map((inst) => {
         const liste = konten.filter((k) => k.institut === inst);
+        const summe = liste.reduce((s, k) => s + k.saldo, 0);
         return (
           <Karte key={inst}>
-            <div className="mb-1 flex items-baseline justify-between">
-              <p className="font-semibold">{inst}</p>
-              <p className="text-sm tabular-nums text-stone-500">{geld(liste.reduce((s, k) => s + k.saldo, 0), "MXN", 2)}</p>
+            <div className="mb-2 flex items-baseline justify-between border-b border-stone-100 pb-2">
+              <p className="text-base font-semibold">{inst}</p>
+              <p className={`font-semibold tabular-nums ${summe < 0 ? "text-rose-700" : ""}`}>{geld(summe, "MXN", 2)}</p>
             </div>
             <ul className="divide-y divide-stone-100 text-sm">
               {liste.map((k) => (
                 <KontoZeile key={k.id} k={k} neuLaden={neuLaden} />
               ))}
-              {inst === "HSBC" && depotCash > 0 && (
-                <li className="py-2 text-xs text-stone-400">
-                  Hinweis: Letzter Reporto (CETES) im Depot {geld(depotCash, "MXN", 2)} am {datumKurz(depotCashAm)}. Das Cash im Depot
-                  trägst du beim Konto «Cash im Depot» selbst ein.
-                </li>
-              )}
             </ul>
           </Karte>
         );
       })}
+      </div>
       {!konten.length && (
         <Karte>
           <p className="text-sm text-stone-500">Noch keine Konten erfasst.</p>
@@ -63,10 +50,10 @@ export default function Konten({
       )}
       <p className="text-xs text-stone-500">
         Erwartete Zinsen pro Jahr auf den Guthaben: {geld(zinsenProJahr)} · Kreditkarten offen: {geld(-schulden, "MXN", 2)}. Saldo
-        anklicken zum Ändern.
+        anklicken zum Ändern. Das Barguthaben im Depot steht oben beim Aktiendepot.
       </p>
-      {neu ? <NeuesKonto fertig={() => (setNeu(false), neuLaden())} /> : <Knopf onClick={() => setNeu(true)}>+ Konto oder Karte</Knopf>}
-    </>
+      <div>{neu ? <NeuesKonto fertig={() => (setNeu(false), neuLaden())} /> : <Knopf onClick={() => setNeu(true)}>+ Konto oder Karte</Knopf>}</div>
+    </div>
   );
 }
 
@@ -125,7 +112,7 @@ function KontoZeile({ k, neuLaden }: { k: Konto; neuLaden: () => void }) {
           </Knopf>
         </span>
       ) : (
-        <button onClick={() => setBearbeiten(true)} className={`tabular-nums ${k.saldo < 0 ? "text-red-700" : ""}`} title={`Stand ${datumKurz(k.saldo_am)}`}>
+        <button onClick={() => setBearbeiten(true)} className={`tabular-nums ${k.saldo < 0 ? "text-rose-700" : ""} font-medium hover:underline`} title={`Stand ${datumKurz(k.saldo_am)}`}>
           {geld(k.saldo, k.waehrung, 2)}
         </button>
       )}

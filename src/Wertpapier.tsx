@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { LimitFormular } from "./Finanzen";
+import { AnalystenBalken, analystenVon, LimitFormular } from "./Finanzen";
 import { depotLaden, geld, prozent, type PositionAuswertung, type Tx, type Wertpapier } from "./lib/finanzDaten";
 import { bereich, boosterAuszahlung, boosterSchwellen, erwarteteAuszahlung, wahrscheinlichkeitUnter, type Produkt } from "./lib/produkt";
 import { supabase, zeit } from "./lib/supabase";
@@ -75,6 +75,7 @@ export function WertpapierSeite({ id }: { id: string }) {
   const b = (papier.bericht ?? {}) as Bericht;
   const r = pos?.rendite;
   const analysten = (b.analysten_kaufen ?? 0) + (b.analysten_halten ?? 0) + (b.analysten_verkaufen ?? 0);
+  const ziel = analystenVon({ papier, kurs: pos?.kurs ?? papier.kurs } as PositionAuswertung);
 
   return (
     <Seite titel={papier.emisora}>
@@ -86,7 +87,7 @@ export function WertpapierSeite({ id }: { id: string }) {
       <Karte>
         <p className="mb-2 font-semibold">Meine Position</p>
         {pos && r ? (
-          <dl className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm sm:grid-cols-4">
+          <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
             <Feld titel="Stück" wert={pos.stueck.toLocaleString("de-CH")} />
             <Feld titel={`Kurs (${pos.kursQuelle === "live" ? "aktuell" : "Stand Bank"})`} wert={zahl(pos.kurs, 4)} />
             <Feld titel="Wert" wert={geld(r.wert)} />
@@ -142,7 +143,7 @@ export function WertpapierSeite({ id }: { id: string }) {
         <>
           <Karte>
             {b.beschreibung && <p className="mb-3 text-sm">{b.beschreibung}</p>}
-            <dl className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm sm:grid-cols-4">
+            <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
               <Feld titel="KGV" wert={zahl(b.kgv, 1)} />
               <Feld titel="KGV erwartet" wert={zahl(b.kgv_erwartet, 1)} />
               <Feld titel="KBV" wert={zahl(b.kbv, 1)} />
@@ -156,12 +157,19 @@ export function WertpapierSeite({ id }: { id: string }) {
               <Feld titel="Zahltag" wert={datum(b.naechste_dividende_zahltag)} />
               <Feld titel="52 Wochen tief / hoch" wert={`${zahl(b.tief_52w)} / ${zahl(b.hoch_52w)}`} />
               <Feld titel="Nächste Quartalszahlen" wert={datum(b.naechste_zahlen)} />
-              <Feld titel="Kursziel Analysten" wert={zahl(b.kursziel)} />
-              <Feld
-                titel="Kaufen / Halten / Verkaufen"
-                wert={analysten ? `${b.analysten_kaufen ?? 0} / ${b.analysten_halten ?? 0} / ${b.analysten_verkaufen ?? 0}` : "–"}
-              />
             </dl>
+            {(analysten > 0 || b.kursziel) && (
+              <div className="mt-4 flex flex-wrap items-center gap-6 rounded-lg bg-stone-50 p-3">
+                <div>
+                  <p className="text-xs text-stone-500">Ø Kursziel Analysten</p>
+                  <p className="text-xl font-semibold tabular-nums">{zahl(b.kursziel)}</p>
+                  {ziel.potenzial != null && (
+                    <p className={`text-xs ${ziel.potenzial >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{prozent(ziel.potenzial)} zum heutigen Kurs</p>
+                  )}
+                </div>
+                <AnalystenBalken a={ziel} />
+              </div>
+            )}
             {b.analysten_zusammenfassung && (
               <p className="mt-3 text-sm">
                 <span className="font-medium">Analysten: </span>
@@ -384,7 +392,7 @@ function Feld({ titel, wert }: { titel: string; wert: string }) {
   return (
     <div>
       <dt className="text-xs text-stone-500">{titel}</dt>
-      <dd className="tabular-nums">{wert}</dd>
+      <dd className="font-medium tabular-nums">{wert}</dd>
     </div>
   );
 }
@@ -445,7 +453,7 @@ function ProduktKarte({ p, stueck }: { p: Produkt; stueck: number }) {
     <>
       <h2 className="mb-2 mt-8 text-lg font-semibold">Produkt: {p.bezeichnung ?? "Strukturiertes Produkt"}</h2>
       <Karte>
-        <dl className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm sm:grid-cols-4">
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
           <Feld titel="Basiswert" wert={`${p.basiswert} (${p.basis_ticker})`} />
           <Feld titel="Emittent" wert={p.emittent ?? "–"} />
           <Feld titel="Startkurs" wert={`${zahl(p.startkurs)} ${p.basis_waehrung ?? ""}`} />

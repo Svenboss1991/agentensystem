@@ -24,9 +24,9 @@ export function Navigation() {
   );
 }
 
-export function Seite({ titel, children }: { titel: string; children: React.ReactNode }) {
+export function Seite({ titel, breit, children }: { titel: string; breit?: boolean; children: React.ReactNode }) {
   return (
-    <main className="mx-auto max-w-3xl px-4 py-8">
+    <main className={`mx-auto px-4 py-8 ${breit ? "max-w-5xl" : "max-w-3xl"}`}>
       <Navigation />
       <h1 className="mb-6 text-3xl font-semibold">{titel}</h1>
       {children}
