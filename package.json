@@ -1,0 +1,36 @@
+{
+  "name": "agentensystem",
+  "version": "1.0.0",
+  "description": "Agentensystem für Sven: Mail-Agent und Seite «Heute»",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "typecheck": "tsc",
+    "oauth": "node scripts/oauth.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.135.0",
+    "@supabase/supabase-js": "^2.118.0",
+    "imapflow": "^2.5.2",
+    "mailparser": "^3.9.40",
+    "nodemailer": "^10.1.2",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@netlify/functions": "^6.0.2",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/mailparser": "^3.9.0",
+    "@types/node": "^26.6.5",
+    "@types/nodemailer": "^8.0.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4"
+  },
+  "private": true,
+  "type": "module"
+}
