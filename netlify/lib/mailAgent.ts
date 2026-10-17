@@ -1,12 +1,13 @@
-import { einordnen, entwerfen, type Einordnung } from "./claude.js";
+import { einordnen, entwerfen, istZeitproblem, type Einordnung } from "./claude.js";
 import { db, log, type AccountRow, type Agent, type Kategorie, type MessageRow } from "./db.js";
 import { envOptional } from "./env.js";
 import { providerFor } from "./providers/index.js";
 import type { IncomingMail } from "./providers/types.js";
 
 const START_TAGE = Number(envOptional("MAIL_START_TAGE") ?? 3);
-const MAX_PRO_POSTFACH = Number(envOptional("MAIL_MAX_PRO_LAUF") ?? 50);
-const MAX_VERARBEITUNG = Number(envOptional("MAIL_MAX_VERARBEITUNG") ?? 40);
+const MAX_PRO_POSTFACH = Number(envOptional("MAIL_MAX_PRO_LAUF") ?? 20);
+// Mails, die pro Lauf gleichzeitig eingeordnet werden. Ein Lauf hat höchstens 30 Sekunden.
+const PARALLEL = Number(envOptional("MAIL_PARALLEL") ?? 4);
 const ARCHIV_IM_POSTFACH = envOptional("MAIL_ARCHIV_IM_POSTFACH") === "true";
 
 const ZUTEILUNG: Record<Kategorie, Agent> = {
@@ -72,7 +73,7 @@ function alsMail(row: MessageRow): IncomingMail {
   };
 }
 
-async function entwurfAnlegen(row: MessageRow, account: AccountRow, e: Einordnung): Promise<void> {
+async function entwurfAnlegen(row: MessageRow, account: AccountRow, e: Einordnung, frist: number): Promise<void> {
   // Bei einem Wiederholungslauf nicht doppelt entwerfen.
   const { count } = await db()
     .from("drafts")
@@ -86,7 +87,7 @@ async function entwurfAnlegen(row: MessageRow, account: AccountRow, e: Einordnun
     .select("thema, antwort, sprache")
     .eq("marke", e.marke)
     .eq("geprueft", true);
-  const entwurf = await entwerfen(alsMail(row), account, e, wissen ?? []);
+  const entwurf = await entwerfen(alsMail(row), account, e, wissen ?? [], frist);
   const { error } = await db().from("drafts").insert({
     message_id: row.id,
     text_original: entwurf.text_original,
@@ -99,8 +100,8 @@ async function entwurfAnlegen(row: MessageRow, account: AccountRow, e: Einordnun
   await log("mail", "entwurf_angelegt", row.id, `${e.sprache}, ${e.marke}`);
 }
 
-async function verarbeiten(row: MessageRow, account: AccountRow): Promise<void> {
-  const e = await einordnen(alsMail(row), account);
+async function verarbeiten(row: MessageRow, account: AccountRow, frist: number): Promise<void> {
+  const e = await einordnen(alsMail(row), account, frist);
   const zugewiesen = ZUTEILUNG[e.kategorie];
 
   await db()
@@ -123,7 +124,7 @@ async function verarbeiten(row: MessageRow, account: AccountRow): Promise<void> 
   }
 
   const brauchtEntwurf = (e.kategorie === "service" || e.kategorie === "geschäftlich") && e.antwort_noetig;
-  if (brauchtEntwurf) await entwurfAnlegen(row, account, e);
+  if (brauchtEntwurf) await entwurfAnlegen(row, account, e, frist);
 
   // Sven-Regel: Aufgabe nur, wenn er selbst handeln muss. Ein Entwurf allein ist keine Aufgabe,
   // der erscheint ohnehin unter «Entwürfe zur Freigabe».
@@ -141,7 +142,7 @@ async function verarbeiten(row: MessageRow, account: AccountRow): Promise<void> 
   await db().from("messages").update({ status: "verarbeitet", fehler: null }).eq("id", row.id);
 }
 
-async function offeneVerarbeiten(accounts: Map<string, AccountRow>): Promise<{ ok: number; fehler: number }> {
+async function offeneVerarbeiten(accounts: Map<string, AccountRow>, frist: number): Promise<{ ok: number; fehler: number }> {
   // Hängengebliebene Läufe (Absturz, Zeitlimit) nach 20 Minuten wieder freigeben.
   await db()
     .from("messages")
@@ -154,7 +155,7 @@ async function offeneVerarbeiten(accounts: Map<string, AccountRow>): Promise<{ o
     .select("id")
     .eq("status", "neu")
     .order("empfangen_am", { ascending: true })
-    .limit(MAX_VERARBEITUNG);
+    .limit(PARALLEL);
   if (!kandidaten?.length) return { ok: 0, fehler: 0 };
 
   // Beanspruchen, damit ein parallel laufender Durchgang dieselben Mails nicht doppelt bearbeitet.
@@ -168,42 +169,53 @@ async function offeneVerarbeiten(accounts: Map<string, AccountRow>): Promise<{ o
 
   let ok = 0;
   let fehler = 0;
-  for (const row of (rows ?? []) as MessageRow[]) {
-    const account = accounts.get(row.account_id);
-    try {
-      if (!account) throw new Error("Postfach inaktiv oder gelöscht");
-      await verarbeiten(row, account);
-      ok++;
-    } catch (err) {
-      fehler++;
-      const msg = err instanceof Error ? err.message : String(err);
-      await db().from("messages").update({ status: "fehler", fehler: msg }).eq("id", row.id);
-      await log("mail", "fehler", row.id, msg);
-    }
-  }
+  await Promise.all(
+    ((rows ?? []) as MessageRow[]).map(async (row) => {
+      const account = accounts.get(row.account_id);
+      try {
+        if (!account) throw new Error("Postfach inaktiv oder gelöscht");
+        await verarbeiten(row, account, frist);
+        ok++;
+      } catch (err) {
+        if (istZeitproblem(err)) {
+          // Kein Fehler: im nächsten Lauf nochmals versuchen.
+          await db().from("messages").update({ status: "neu" }).eq("id", row.id);
+          return;
+        }
+        fehler++;
+        const msg = err instanceof Error ? err.message : String(err);
+        await db().from("messages").update({ status: "fehler", fehler: msg }).eq("id", row.id);
+        await log("mail", "fehler", row.id, msg);
+      }
+    }),
+  );
   return { ok, fehler };
 }
 
 // ─── Ein Durchlauf ───────────────────────────────────────────────────────────
 
-export async function mailAgentLauf(): Promise<string> {
+/** frist: Zeitpunkt (ms), bis zu dem der Lauf fertig sein muss. */
+export async function mailAgentLauf(frist: number): Promise<string> {
   const { data, error } = await db().from("accounts").select("*").eq("aktiv", true);
   if (error) throw new Error(error.message);
   const accounts = new Map((data as AccountRow[]).map((a) => [a.id, a]));
 
-  let neu = 0;
-  for (const account of accounts.values()) {
-    try {
-      const n = await abholen(account);
-      neu += n;
-      if (n > 0) await log("mail", "abgeholt", account.adresse, `${n} neue Mails`);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      await db().from("accounts").update({ sync_fehler: msg, sync_zuletzt: new Date().toISOString() }).eq("id", account.id);
-      await log("mail", "abholen_fehler", account.adresse, msg);
-    }
-  }
+  const ergebnisse = await Promise.all(
+    [...accounts.values()].map(async (account) => {
+      try {
+        const n = await abholen(account);
+        if (n > 0) await log("mail", "abgeholt", account.adresse, `${n} neue Mails`);
+        return n;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        await db().from("accounts").update({ sync_fehler: msg, sync_zuletzt: new Date().toISOString() }).eq("id", account.id);
+        await log("mail", "abholen_fehler", account.adresse, msg);
+        return 0;
+      }
+    }),
+  );
+  const neu = ergebnisse.reduce((a, b) => a + b, 0);
 
-  const { ok, fehler } = await offeneVerarbeiten(accounts);
+  const { ok, fehler } = await offeneVerarbeiten(accounts, frist);
   return `${neu} neu, ${ok} verarbeitet, ${fehler} Fehler`;
 }

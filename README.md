@@ -4,7 +4,7 @@ Datenbank, Mail-Agent und die Seite «Heute». Bauplan siehe `BAUPLAN.md`.
 
 ```
 supabase/migrations/   Datenbank (alle Tabellen aus dem Bauplan, RLS: nur Sven)
-netlify/functions/     mail-agent-tick (alle 5 Min.) → mail-agent-background, send-draft
+netlify/functions/     mail-agent-tick (alle 5 Min.), send-draft
 netlify/lib/           Mail-Agent, Claude-Aufrufe, Postfach-Anbindungen (IMAP, Gmail, Outlook)
 src/                   Seite «Heute» (React + Vite + Tailwind)
 scripts/oauth.ts       einmalige OAuth-Freigabe für Gmail/Hotmail
@@ -12,7 +12,7 @@ scripts/oauth.ts       einmalige OAuth-Freigabe für Gmail/Hotmail
 
 ## Was der Mail-Agent tut
 
-Alle 5 Minuten, für jedes aktive Postfach:
+Alle 5 Minuten (läuft im Netlify-Gratis-Abo; pro Lauf höchstens 30 Sekunden, darum werden pro Lauf bis zu `MAIL_PARALLEL` Mails eingeordnet, der Rest im nächsten Lauf):
 
 1. Neue Mails holen und in `messages` speichern (Duplikate werden ignoriert).
 2. Mit Claude Sprache (DE/EN/ES/andere), Kategorie und Marke bestimmen.
@@ -33,7 +33,7 @@ Finanz- und Service-Mails sind schon dem jeweiligen Agenten zugeteilt (`zugewies
 
 ### 2. Netlify
 1. Repository verbinden. Build-Einstellungen kommen aus `netlify.toml`.
-2. Umgebungsvariablen aus `.env.example` eintragen. `AGENT_SECRET`: `openssl rand -hex 32`.
+2. Umgebungsvariablen aus `.env.example` eintragen.
 3. Deploy. Die geplante Funktion läuft erst auf der produktiven Seite.
 
 ### 3. Besitzer festlegen
