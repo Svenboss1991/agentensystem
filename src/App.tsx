@@ -44,36 +44,40 @@ function Rahmen({ children }: { children: React.ReactNode }) {
 
 function Login() {
   const [email, setEmail] = useState("");
-  const [status, setStatus] = useState<"" | "gesendet" | string>("");
+  const [passwort, setPasswort] = useState("");
+  const [fehler, setFehler] = useState("");
 
-  async function senden(e: React.FormEvent) {
+  async function anmelden(e: React.FormEvent) {
     e.preventDefault();
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: { shouldCreateUser: false, emailRedirectTo: window.location.origin },
-    });
-    setStatus(error ? error.message : "gesendet");
+    const { error } = await supabase.auth.signInWithPassword({ email, password: passwort });
+    setFehler(error ? "Anmeldung fehlgeschlagen. E-Mail oder Passwort stimmt nicht." : "");
   }
 
   return (
     <Rahmen>
       <h1 className="mb-6 text-2xl font-semibold">Heute</h1>
-      {status === "gesendet" ? (
-        <p>Anmeldelink ist unterwegs. Bitte Postfach prüfen.</p>
-      ) : (
-        <form onSubmit={senden} className="flex flex-col gap-3">
-          <input
-            type="email"
-            required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="E-Mail"
-            className="rounded border border-stone-300 px-3 py-2"
-          />
-          <button className="rounded bg-stone-900 px-3 py-2 text-white">Anmeldelink senden</button>
-          {status && <p className="text-sm text-red-700">{status}</p>}
-        </form>
-      )}
+      <form onSubmit={anmelden} className="flex flex-col gap-3">
+        <input
+          type="email"
+          required
+          autoComplete="username"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="E-Mail"
+          className="rounded border border-stone-300 px-3 py-2"
+        />
+        <input
+          type="password"
+          required
+          autoComplete="current-password"
+          value={passwort}
+          onChange={(e) => setPasswort(e.target.value)}
+          placeholder="Passwort"
+          className="rounded border border-stone-300 px-3 py-2"
+        />
+        <button className="rounded bg-stone-900 px-3 py-2 text-white">Anmelden</button>
+        {fehler && <p className="text-sm text-red-700">{fehler}</p>}
+      </form>
     </Rahmen>
   );
 }

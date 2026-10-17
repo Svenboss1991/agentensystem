@@ -27,7 +27,7 @@ Finanz- und Service-Mails sind schon dem jeweiligen Agenten zugeteilt (`zugewies
 ## Einrichtung
 
 ### 1. Supabase
-1. Projekt anlegen. Unter *Authentication → Sign In / Providers* «Allow new users to sign up» **ausschalten**, dann unter *Users* Svens Adresse einladen.
+1. Projekt anlegen. Unter *Authentication → Sign In / Providers* «Allow new users to sign up» **ausschalten**, dann unter *Users → Add user → Create new user* Svens Adresse mit Passwort anlegen («Auto Confirm User» anhaken).
 2. Migration ausführen: `supabase db push` oder Inhalt von `supabase/migrations/…_init.sql` im SQL-Editor ausführen.
 3. Unter *Authentication → URL Configuration* die Netlify-Adresse als Site URL eintragen.
 
@@ -37,9 +37,9 @@ Finanz- und Service-Mails sind schon dem jeweiligen Agenten zugeteilt (`zugewies
 3. Deploy. Die geplante Funktion läuft erst auf der produktiven Seite.
 
 ### 3. Besitzer festlegen
-Einmal auf der Seite anmelden. Sie zeigt die Benutzer-ID. Dann im SQL-Editor:
+Im SQL-Editor:
 ```sql
-insert into public.app_owner (user_id) values ('<benutzer-id>');
+insert into public.app_owner (user_id) select id from auth.users where email = '<svens-adresse>';
 ```
 
 ### 4. Postfächer
