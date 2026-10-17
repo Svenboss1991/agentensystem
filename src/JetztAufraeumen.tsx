@@ -32,13 +32,18 @@ export default function JetztAufraeumen({ accountId, fertig }: { accountId: stri
           `${r.titel ?? ""}: ${(r.geprueft ?? 0).toLocaleString("de-CH")} Mails geprüft · insgesamt ${verschoben.toLocaleString("de-CH")} in den Papierkorb …`,
         );
       } catch (e) {
-        // Zeitüberschreitung o. Ä.: nochmals versuchen, nach drei Fehlern aufhören.
-        if (++fehlversuche >= 3) {
-          setMeldung(e instanceof Error ? e.message : String(e));
+        const text = e instanceof Error ? e.message : String(e);
+        // Zeitüberschreitung oder Google bremst: kurz warten und weitermachen, nach mehreren Fehlern aufhören.
+        if (++fehlversuche >= 6) {
+          setMeldung(text);
           setLaeuft(false);
           return;
         }
+        setMeldung(`${text} – warte kurz und mache dann weiter …`);
+        await new Promise((r) => setTimeout(r, 30_000));
       }
+      // Kleine Pause zwischen den Schritten, damit Gmail nicht bremst.
+      await new Promise((r) => setTimeout(r, 2_000));
     }
     setMeldung(
       `Fertig: ${verschoben.toLocaleString("de-CH")} Mails in den Papierkorb.` +

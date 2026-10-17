@@ -14,7 +14,14 @@ export default async () => {
   const { data: staende } = await db().from("aufraeum_stand").select("account_id, kategorie, zuletzt, cursor, durchgang_fertig_am");
   const stand = new Map((staende ?? []).map((s) => [`${s.account_id}|${s.kategorie}`, s]));
 
+  // Postfächer, die gerade von Hand aufgeräumt werden («Jetzt aufräumen»), in Ruhe lassen,
+  // damit Gmail & Co. nicht wegen zu vieler Anfragen bremsen.
+  const beschaeftigt = new Set(
+    (staende ?? []).filter((s) => s.zuletzt && Date.now() - Date.parse(s.zuletzt) < 90_000).map((s) => s.account_id),
+  );
+
   const kandidaten = ((accounts ?? []) as AccountRow[])
+    .filter((a) => !beschaeftigt.has(a.id))
     .flatMap((a) =>
       Object.keys(aufraeumerFuer(a).kategorien).map((k) => {
         const s = stand.get(`${a.id}|${k}`);

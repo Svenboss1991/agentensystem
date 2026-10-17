@@ -77,14 +77,14 @@ const gmailAufraeumer: Aufraeumer = {
   async seite(account, kategorie, cursor) {
     const liste = await gmail<GListe & { nextPageToken?: string }>(
       account,
-      `${gPfad(G_KAT[kategorie].q, 300)}${cursor ? `&pageToken=${encodeURIComponent(cursor)}` : ""}`,
+      `${gPfad(G_KAT[kategorie].q, 150)}${cursor ? `&pageToken=${encodeURIComponent(cursor)}` : ""}`,
     );
     const ids = (liste.messages ?? []).map((m) => m.id);
     const mails: StichprobenMail[] = [];
-    // Kopfzeilen je 25 parallel holen.
-    for (let i = 0; i < ids.length; i += 25) {
+    // Kopfzeilen je 10 parallel holen (Gmail erlaubt rund 6000 «Einheiten» pro Minute, eine Abfrage kostet 5).
+    for (let i = 0; i < ids.length; i += 10) {
       const teil = await Promise.all(
-        ids.slice(i, i + 25).map((id) =>
+        ids.slice(i, i + 10).map((id) =>
           gmail<{ payload?: { headers?: { name: string; value: string }[] } }>(
             account,
             `/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`,

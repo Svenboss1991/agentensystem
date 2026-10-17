@@ -5,13 +5,27 @@ import { parseRaw, replySubject, type FetchResult, type IncomingMail, type MailP
 
 const API = "https://gmail.googleapis.com/gmail/v1/users/me";
 
+const warten = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 export async function gmail<T>(account: AccountRow, path: string, init?: RequestInit): Promise<T> {
   const token = await accessToken(account);
-  const res = await fetch(`${API}${path}`, {
-    ...init,
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...init?.headers },
-  });
-  if (!res.ok) throw new Error(`Gmail ${path.split("?")[0]}: ${res.status} ${await res.text()}`);
+  let res: Response;
+  // Google begrenzt die Anfragen pro Minute; bei «rateLimitExceeded» kurz warten und erneut versuchen.
+  for (let versuch = 1; ; versuch++) {
+    res = await fetch(`${API}${path}`, {
+      ...init,
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...init?.headers },
+    });
+    if (res.ok || versuch >= 3) break;
+    const text = await res.clone().text();
+    if (res.status !== 429 && !(res.status === 403 && /rate ?limit/i.test(text))) break;
+    await warten(versuch * 2_000 + Math.random() * 1_000);
+  }
+  if (!res.ok) {
+    const text = await res.text();
+    if (res.status === 429 || /rate ?limit/i.test(text)) throw new Error("Gmail bremst (zu viele Anfragen pro Minute)");
+    throw new Error(`Gmail ${path.split("?")[0]}: ${res.status} ${text}`);
+  }
   // Manche Aufrufe (z. B. batchModify) antworten ohne Inhalt.
   const text = await res.text();
   return (text ? JSON.parse(text) : {}) as T;
