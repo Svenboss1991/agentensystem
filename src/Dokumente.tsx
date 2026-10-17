@@ -176,13 +176,20 @@ export function DokumenteListe({
     setAnalysiert(id);
     try {
       await analysieren(id);
-      setOffen(id);
     } catch {
       // Fehler steht danach beim Dokument.
     }
     setAnalysiert(null);
     await laden();
   }
+
+  // Während eine Analyse läuft (einige Minuten im Hintergrund), die Liste alle 20 Sekunden neu laden.
+  const laeuft = liste.some((d) => d.analyse_status === "laeuft");
+  useEffect(() => {
+    if (!laeuft) return;
+    const t = setInterval(laden, 20_000);
+    return () => clearInterval(t);
+  }, [laeuft, laden]);
 
   const sichtbar = filter ? liste.filter(filter) : liste;
   const allgemein = !firmaId && !kontaktId && !akteId;
@@ -236,7 +243,7 @@ export function DokumenteListe({
                       {offen === d.id ? "Analyse schliessen" : "Analyse"}
                     </button>
                   ) : d.analyse_status === "laeuft" || analysiert === d.id ? (
-                    <span className="text-stone-500">wird analysiert …</span>
+                    <span className="text-stone-500">wird analysiert … (einige Minuten)</span>
                   ) : (
                     <button onClick={() => starten(d.id)} className="underline">
                       {d.analyse_status === "fehler" ? "nochmals analysieren" : "analysieren"}
