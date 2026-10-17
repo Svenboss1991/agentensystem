@@ -30,7 +30,7 @@ function klarerFehler(err: unknown): Error {
   return details ? new Error(`${e.message}: ${details}`) : e;
 }
 
-async function withImap<T>(account: AccountRow, fn: (c: ImapFlow) => Promise<T>): Promise<T> {
+export async function withImap<T>(account: AccountRow, fn: (c: ImapFlow) => Promise<T>): Promise<T> {
   const client = imapClient(account);
   try {
     await client.connect();
@@ -128,17 +128,32 @@ export const imapProvider: MailProvider = {
     });
   },
 
-  async archive(account, externId) {
-    const ziel = account.archiv_ordner || "Archive";
-    await withImap(account, async (client) => {
-      const folders = await client.list();
-      if (!folders.some((f) => f.path === ziel)) await client.mailboxCreate(ziel);
+  async ablegen(account, eintraege) {
+    return withImap(account, async (client) => {
+      // Manche Server (z. B. Hostinger) verlangen Ordner unterhalb von «INBOX.»
+      const ns = client.namespace as { prefix?: string } | undefined;
+      const prefix = ns?.prefix ?? "";
+      const vorhanden = new Set((await client.list()).map((f) => f.path));
+      const ergebnisse: { externId: string; fehler?: string }[] = [];
       const lock = await client.getMailboxLock("INBOX");
       try {
-        await client.messageMove(externId, ziel, { uid: true });
+        for (const e of eintraege) {
+          const pfad = `${prefix}${e.ordner}`;
+          try {
+            if (!vorhanden.has(pfad)) {
+              await client.mailboxCreate(pfad);
+              vorhanden.add(pfad);
+            }
+            const ok = await client.messageMove(e.externId, pfad, { uid: true });
+            ergebnisse.push(ok ? { externId: e.externId } : { externId: e.externId, fehler: "nicht mehr im Posteingang" });
+          } catch (err) {
+            ergebnisse.push({ externId: e.externId, fehler: klarerFehler(err).message });
+          }
+        }
       } finally {
         lock.release();
       }
+      return ergebnisse;
     });
   },
 

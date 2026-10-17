@@ -57,12 +57,14 @@ export default function Postfaecher({ postfaecher }: { postfaecher: Postfach[] }
                     {verbindet === p.id ? "Öffnet …" : "Verbinden"}
                   </Knopf>
                 )}
-                {(p.provider === "gmail" || p.provider === "hotmail") && p.aktiv && aufraeumen !== p.id && (
-                  <Knopf onClick={() => setAufraeumen(p.id)}>Aufräumen</Knopf>
-                )}
-                {(p.provider === "gmail" || p.provider === "hotmail") && p.aktiv && aufraeumen === p.id && (
+                {p.aktiv && aufraeumen !== p.id && <Knopf onClick={() => setAufraeumen(p.id)}>Aufräumen</Knopf>}
+                {p.aktiv && aufraeumen === p.id && (
                   <div className="w-full">
-                    <Aufraeumen anbieter={p.provider} schliessen={() => setAufraeumen(null)} />
+                    <Aufraeumen
+                      anbieter={p.typ === "imap" ? "imap" : p.provider === "gmail" ? "gmail" : "hotmail"}
+                      accountId={p.id}
+                      schliessen={() => setAufraeumen(null)}
+                    />
                   </div>
                 )}
               </li>

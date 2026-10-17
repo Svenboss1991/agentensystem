@@ -24,6 +24,12 @@ const TEXTE = {
     leeren:
       "Gmail leert ihn nach 30 Tagen von selbst. Für sofort mehr Platz in Gmail links «Papierkorb» öffnen und oben «Papierkorb jetzt leeren» klicken.",
   },
+  imap: {
+    titel: "Postfach aufräumen",
+    schutz: "Markierte Mails (Fahne/Stern) bleiben immer unberührt.",
+    ordner: "den Papierkorb",
+    leeren: "Für mehr Platz im Webmail deines Anbieters den Papierkorb leeren.",
+  },
   hotmail: {
     titel: "Hotmail aufräumen",
     schutz: "Mails mit Fahne oder hoher Wichtigkeit bleiben immer unberührt.",
@@ -37,9 +43,18 @@ const TEXTE = {
  * Volles Postfach aufräumen: Claude prüft je Absender, ob es Müll ist oder noch gebraucht wird.
  * Verschoben wird nur, was Sven angehakt hat. Endgültig leert Sven selbst.
  */
-export default function Aufraeumen({ anbieter, schliessen }: { anbieter: "gmail" | "hotmail"; schliessen: () => void }) {
+export default function Aufraeumen({
+  anbieter,
+  accountId,
+  schliessen,
+}: {
+  anbieter: "gmail" | "hotmail" | "imap";
+  accountId: string;
+  schliessen: () => void;
+}) {
   const t = TEXTE[anbieter];
-  const fn = `${anbieter}-aufraeumen`;
+  const name = `${anbieter}-aufraeumen`;
+  const fn = <T,>(body: Record<string, unknown>) => funktion<T>(name, { ...body, account_id: accountId });
   const [vorschau, setVorschau] = useState<Vorschau | null>(null);
   const [kategorie, setKategorie] = useState<string | null>(null);
   const [absender, setAbsender] = useState<Absender[]>([]);
@@ -49,7 +64,7 @@ export default function Aufraeumen({ anbieter, schliessen }: { anbieter: "gmail"
   const [laeuft, setLaeuft] = useState(false);
 
   const vorschauLaden = () =>
-    funktion<Vorschau>(fn, { aktion: "vorschau" })
+    fn<Vorschau>({ aktion: "vorschau" })
       .then(setVorschau)
       .catch((e) => setStatus(e.message));
 
@@ -62,7 +77,7 @@ export default function Aufraeumen({ anbieter, schliessen }: { anbieter: "gmail"
     setLaeuft(true);
     setStatus("Claude prüft die Absender …");
     try {
-      const r = await funktion<{ absender: Absender[]; weitere: number }>(fn, {
+      const r = await fn<{ absender: Absender[]; weitere: number }>({
         aktion: "analyse",
         kategorie: key,
         bekannt: bisher.map((a) => a.adresse),
@@ -86,7 +101,7 @@ export default function Aufraeumen({ anbieter, schliessen }: { anbieter: "gmail"
     try {
       // Grosse Mengen gehen in Portionen; weiter aufrufen, bis alle Absender erledigt sind.
       while (rest.length) {
-        const r = await funktion<{ verschoben: number; rest: string[] }>(fn, { aktion: "papierkorb", kategorie, absender: rest });
+        const r = await fn<{ verschoben: number; rest: string[] }>({ aktion: "papierkorb", kategorie, absender: rest });
         gesamt += r.verschoben;
         rest = r.rest;
         setStatus(`${gesamt.toLocaleString("de-CH")} Mails verschoben …`);

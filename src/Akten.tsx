@@ -348,6 +348,9 @@ export function AkteSeite({ id }: { id: string }) {
   async function aendern(felder: Partial<Akte> & Record<string, unknown>, ereignis?: string) {
     await supabase.from("akten").update({ ...felder, zuletzt_aktiv: new Date().toISOString() }).eq("id", id);
     // Wer die Akte selbst weiterschiebt, hat die offenen Aufgaben dazu erledigt.
+    if (felder.status === "erledigt") {
+      await supabase.from("messages").update({ status: "erledigt" }).eq("akte_id", id).eq("status", "verarbeitet");
+    }
     if (felder.status === "erledigt" || felder.wiedervorlage_am || felder.am_zug === "gegenseite") {
       await supabase.from("tasks").update({ status: "erledigt", erledigt_am: new Date().toISOString() }).eq("akte_id", id).eq("status", "offen");
     }

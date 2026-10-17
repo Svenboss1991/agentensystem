@@ -48,11 +48,32 @@ export const outlookProvider: MailProvider = {
     return { mails, sync: { sync_sent_seit: neuester.toISOString() } };
   },
 
-  async archive(account, externId) {
-    await graph(account, `/messages/${externId}/move`, {
-      method: "POST",
-      body: JSON.stringify({ destinationId: "archive" }),
-    });
+  async ablegen(account, eintraege) {
+    const { value: ordner } = (await (await graph(account, "/mailFolders?$top=200&$select=id,displayName")).json()) as {
+      value: { id: string; displayName: string }[];
+    };
+    const ids = new Map(ordner.map((o) => [o.displayName, o.id]));
+    const ergebnisse: { externId: string; fehler?: string }[] = [];
+    for (const e of eintraege) {
+      try {
+        let ordnerId = ids.get(e.ordner);
+        if (!ordnerId) {
+          const neu = (await (
+            await graph(account, "/mailFolders", { method: "POST", body: JSON.stringify({ displayName: e.ordner }) })
+          ).json()) as { id: string };
+          ordnerId = neu.id;
+          ids.set(e.ordner, ordnerId);
+        }
+        await graph(account, `/messages/${e.externId}/move`, {
+          method: "POST",
+          body: JSON.stringify({ destinationId: ordnerId }),
+        });
+        ergebnisse.push({ externId: e.externId });
+      } catch (err) {
+        ergebnisse.push({ externId: e.externId, fehler: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return ergebnisse;
   },
 
   async sendReply(account, original, text) {

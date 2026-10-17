@@ -43,11 +43,32 @@ export const gmailProvider: MailProvider = {
     return { mails, sync: { sync_sent_seit: neuester.toISOString() } };
   },
 
-  async archive(account, externId) {
-    await gmail(account, `/messages/${externId}/modify`, {
-      method: "POST",
-      body: JSON.stringify({ removeLabelIds: ["INBOX"] }),
-    });
+  async ablegen(account, eintraege) {
+    // Gmail kennt Labels statt Ordner: Label setzen und aus dem Posteingang nehmen.
+    const { labels = [] } = await gmail<{ labels?: { id: string; name: string }[] }>(account, "/labels");
+    const ids = new Map(labels.map((l) => [l.name, l.id]));
+    const ergebnisse: { externId: string; fehler?: string }[] = [];
+    for (const e of eintraege) {
+      try {
+        let labelId = ids.get(e.ordner);
+        if (!labelId) {
+          const neu = await gmail<{ id: string }>(account, "/labels", {
+            method: "POST",
+            body: JSON.stringify({ name: e.ordner, labelListVisibility: "labelShow", messageListVisibility: "show" }),
+          });
+          labelId = neu.id;
+          ids.set(e.ordner, labelId);
+        }
+        await gmail(account, `/messages/${e.externId}/modify`, {
+          method: "POST",
+          body: JSON.stringify({ addLabelIds: [labelId], removeLabelIds: ["INBOX"] }),
+        });
+        ergebnisse.push({ externId: e.externId });
+      } catch (err) {
+        ergebnisse.push({ externId: e.externId, fehler: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return ergebnisse;
   },
 
   async sendReply(account, original, text) {

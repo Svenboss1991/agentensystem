@@ -10,7 +10,6 @@ const START_TAGE_GESENDET = Number(envOptional("MAIL_START_TAGE_GESENDET") ?? 14
 const MAX_PRO_POSTFACH = Number(envOptional("MAIL_MAX_PRO_LAUF") ?? 20);
 // Mails, die pro Lauf gleichzeitig eingeordnet werden. Ein Lauf hat höchstens 30 Sekunden.
 const PARALLEL = Number(envOptional("MAIL_PARALLEL") ?? 4);
-const ARCHIV_IM_POSTFACH = envOptional("MAIL_ARCHIV_IM_POSTFACH") === "true";
 const ZEITZONE = "America/Bahia_Banderas";
 
 const ZUTEILUNG: Record<Kategorie, Agent> = {
@@ -205,6 +204,8 @@ async function akteNachfuehren(
   if (z.aenderung === "erledigt") {
     Object.assign(aenderung, { status: "erledigt", erledigt_am: jetzt });
     await akteAufgabenSchliessen(akteId);
+    // Erledigte Akte: ihre Mails dürfen ins Postfach-Ordner wandern.
+    await db().from("messages").update({ status: "erledigt" }).eq("akte_id", akteId).eq("status", "verarbeitet");
     await ereignis(akteId, "Als erledigt markiert");
   } else if (z.aenderung === "sven_am_zug") {
     Object.assign(aenderung, { am_zug: "sven", erinnert_am: null });
@@ -267,9 +268,8 @@ async function eingangVerarbeiten(row: MessageRow, account: AccountRow, frist: n
   await log("mail", "eingeordnet", row.id, `${e.kategorie} → ${zugewiesen} (${e.marke}, ${e.sprache})`);
 
   if (e.kategorie === "newsletter") {
-    if (ARCHIV_IM_POSTFACH) await providerFor(account).archive(account, row.extern_id);
+    // Wandert beim nächsten Ablage-Schritt in den Ordner «Newsletter».
     await db().from("messages").update({ status: "archiviert" }).eq("id", row.id);
-    await log("mail", "archiviert", row.id, ARCHIV_IM_POSTFACH ? "auch im Postfach" : "nur in der Datenbank");
     return;
   }
 
@@ -382,6 +382,104 @@ async function faelligeAkten(): Promise<number> {
   return data?.length ?? 0;
 }
 
+// ─── Schritt 4: erledigte Mails im Postfach ablegen ──────────────────────────
+
+const ORDNER: Record<string, string> = {
+  privat: "Privat",
+  finanzen: "Finanzen",
+  behoerden: "Behörden & Recht",
+  tamelo: "Tamelo",
+  don_sombrerito: "Don Sombrerito",
+  clave_suiza: "Clave Suiza",
+  newsletter: "Newsletter",
+};
+
+interface AblageZeile {
+  id: string;
+  account_id: string;
+  extern_id: string;
+  status: string;
+  kategorie: Kategorie | null;
+  marke: Marke | null;
+  zugewiesen_an: Agent | null;
+  akten: { bereich: string } | null;
+  drafts: { status: string }[];
+  tasks: { status: string }[];
+}
+
+function ordnerFuer(m: AblageZeile): string {
+  if (m.kategorie === "newsletter") return ORDNER.newsletter;
+  if (m.akten?.bereich) return ORDNER[m.akten.bereich] ?? ORDNER.privat;
+  if (m.kategorie === "finanz") return ORDNER.finanzen;
+  if (m.marke && m.marke !== "keine") return ORDNER[m.marke];
+  return ORDNER.privat;
+}
+
+/**
+ * Eine Mail ist fertig, wenn Sven nichts mehr damit tun muss: erledigt oder Newsletter,
+ * oder eingeordnet ohne offenen Entwurf, ohne offene Aufgabe und nicht auf «Zum Lesen».
+ */
+function istFertig(m: AblageZeile): boolean {
+  if (m.status === "erledigt" || m.status === "archiviert") return true;
+  if (m.status !== "verarbeitet") return false;
+  const offen = m.drafts.some((d) => d.status === "offen" || d.status === "fehler") || m.tasks.some((t) => t.status === "offen");
+  return !offen && m.zugewiesen_an !== "sven";
+}
+
+async function ablegen(accounts: Map<string, AccountRow>): Promise<number> {
+  const { data } = await db()
+    .from("messages")
+    // akten ist doppelt mit messages verknüpft; der Hinweis wählt die Beziehung über messages.akte_id.
+    .select(
+      "id, account_id, extern_id, status, kategorie, marke, zugewiesen_an, akten!messages_akte_id_fkey(bereich), drafts(status), tasks(status)",
+    )
+    .eq("richtung", "eingehend")
+    .is("abgelegt_am", null)
+    .is("ablage_fehler", null)
+    .in("status", ["erledigt", "archiviert", "verarbeitet"])
+    .order("empfangen_am", { ascending: true })
+    .limit(80);
+  const fertig = ((data ?? []) as unknown as AblageZeile[]).filter(istFertig).slice(0, 40);
+
+  let abgelegt = 0;
+  const proPostfach = new Map<string, AblageZeile[]>();
+  for (const m of fertig) proPostfach.set(m.account_id, [...(proPostfach.get(m.account_id) ?? []), m]);
+
+  await Promise.all(
+    [...proPostfach].map(async ([accountId, mails]) => {
+      const account = accounts.get(accountId);
+      if (!account) return;
+      try {
+        const ergebnisse = await mitZeitlimit(
+          providerFor(account).ablegen(
+            account,
+            mails.map((m) => ({ externId: m.extern_id, ordner: ordnerFuer(m) })),
+          ),
+          12_000,
+          `Ablage ${account.adresse}`,
+        );
+        for (const m of mails) {
+          const r = ergebnisse.find((x) => x.externId === m.extern_id);
+          if (!r) continue;
+          await db()
+            .from("messages")
+            .update(
+              r.fehler
+                ? { ablage_fehler: r.fehler }
+                : { abgelegt_am: new Date().toISOString(), ablage_ordner: ordnerFuer(m) },
+            )
+            .eq("id", m.id);
+          if (!r.fehler) abgelegt++;
+        }
+      } catch (err) {
+        await log("mail", "ablage_fehler", account.adresse, err instanceof Error ? err.message : String(err));
+      }
+    }),
+  );
+  if (abgelegt) await log("mail", "abgelegt", null, `${abgelegt} Mails in Ordner verschoben`);
+  return abgelegt;
+}
+
 // ─── Ein Durchlauf ───────────────────────────────────────────────────────────
 
 /** frist: Zeitpunkt (ms), bis zu dem der Lauf fertig sein muss. */
@@ -407,6 +505,6 @@ export async function mailAgentLauf(frist: number): Promise<string> {
   const neu = ergebnisse.reduce((a, b) => a + b, 0);
 
   const faellig = await faelligeAkten();
-  const { ok, fehler } = await offeneVerarbeiten(accounts, frist);
-  return `${neu} neu, ${ok} verarbeitet, ${fehler} Fehler${faellig ? `, ${faellig} Akten zur Wiedervorlage` : ""}`;
+  const [{ ok, fehler }, abgelegt] = await Promise.all([offeneVerarbeiten(accounts, frist), ablegen(accounts)]);
+  return `${neu} neu, ${ok} verarbeitet, ${abgelegt} abgelegt, ${fehler} Fehler${faellig ? `, ${faellig} Akten zur Wiedervorlage` : ""}`;
 }

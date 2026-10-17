@@ -33,12 +33,22 @@ export interface FetchResult {
   sync: SyncState;
 }
 
+export interface Ablage {
+  externId: string;
+  ordner: string;
+}
+
+export interface AblageErgebnis {
+  externId: string;
+  fehler?: string;
+}
+
 export interface MailProvider {
   fetchNew(account: AccountRow, startDatum: Date, max: number): Promise<FetchResult>;
   /** Gesendete Mails (für Pendenzen). externId ist mit «sent:» vorangestellt. */
   fetchSent(account: AccountRow, startDatum: Date, max: number): Promise<FetchResult>;
-  /** Aus dem Posteingang ins Archiv verschieben. Nie löschen. */
-  archive(account: AccountRow, externId: string): Promise<void>;
+  /** Erledigte Mails in Bereichs-Ordner verschieben (Ordner werden bei Bedarf angelegt). Nie löschen. */
+  ablegen(account: AccountRow, eintraege: Ablage[]): Promise<AblageErgebnis[]>;
   sendReply(account: AccountRow, original: MessageRow, text: string): Promise<void>;
 }
 
