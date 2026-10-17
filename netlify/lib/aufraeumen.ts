@@ -18,7 +18,8 @@ export interface StichprobenMail {
 export interface Aufraeumer {
   kategorien: Record<string, string>; // key → Titel
   vorschau(account: AccountRow): Promise<{ kategorien: { key: string; titel: string; anzahl: number }[]; papierkorb: number }>;
-  stichprobe(account: AccountRow, kategorie: string): Promise<StichprobenMail[]>;
+  /** Eine Seite Mails der Kategorie ab `cursor` (null = von vorne). `naechster` ist null am Ende. */
+  seite(account: AccountRow, kategorie: string, cursor: string | null): Promise<{ mails: StichprobenMail[]; naechster: string | null }>;
   /** Mails der Absender in dieser Kategorie in den Papierkorb, bis `ende`. Gibt Anzahl und noch offene Absender zurück. */
   verschieben(account: AccountRow, kategorie: string, adressen: string[], ende: number): Promise<{ verschoben: number; rest: string[] }>;
 }
@@ -30,6 +31,7 @@ const vorTagen = (t: number) => new Date(Date.now() - t * 86_400_000);
 const G_SCHUTZ = "-is:starred -is:important";
 const G_KAT: Record<string, { titel: string; q: string }> = {
   werbung: { titel: "Werbung (Tab «Werbung»), älter als 30 Tage", q: `category:promotions older_than:30d ${G_SCHUTZ}` },
+  allgemein: { titel: "Posteingang «Allgemein», älter als 1 Jahr", q: `category:primary older_than:1y ${G_SCHUTZ}` },
   sozial: { titel: "Soziale Netzwerke, älter als 30 Tage", q: `category:social older_than:30d ${G_SCHUTZ}` },
   foren: { titel: "Foren und Mailinglisten, älter als 30 Tage", q: `category:forums older_than:30d ${G_SCHUTZ}` },
   updates: { titel: "Benachrichtigungen (Tab «Updates»), älter als 1 Jahr", q: `category:updates older_than:1y ${G_SCHUTZ}` },
@@ -60,8 +62,12 @@ const gmailAufraeumer: Aufraeumer = {
     return { kategorien, papierkorb: await schaetzung("in:trash") };
   },
 
-  async stichprobe(account, kategorie) {
-    const ids = ((await gmail<GListe>(account, gPfad(G_KAT[kategorie].q, 300))).messages ?? []).map((m) => m.id);
+  async seite(account, kategorie, cursor) {
+    const liste = await gmail<GListe & { nextPageToken?: string }>(
+      account,
+      `${gPfad(G_KAT[kategorie].q, 300)}${cursor ? `&pageToken=${encodeURIComponent(cursor)}` : ""}`,
+    );
+    const ids = (liste.messages ?? []).map((m) => m.id);
     const mails: StichprobenMail[] = [];
     // Kopfzeilen je 25 parallel holen.
     for (let i = 0; i < ids.length; i += 25) {
@@ -78,7 +84,7 @@ const gmailAufraeumer: Aufraeumer = {
         mails.push({ ...absenderZerlegen(h("from")), betreff: h("subject") });
       }
     }
-    return mails;
+    return { mails, naechster: liste.nextPageToken ?? null };
   },
 
   async verschieben(account, kategorie, adressen, ende) {
@@ -109,6 +115,11 @@ const H_KAT: Record<string, { titel: string; ordner: string; filter: () => strin
     titel: "Posteingang «Sonstige» (Werbung, Newsletter), älter als 30 Tage",
     ordner: "inbox",
     filter: () => `inferenceClassification eq 'other' and receivedDateTime lt ${vorTagen(30).toISOString()} and ${H_SCHUTZ}`,
+  },
+  relevant: {
+    titel: "Posteingang «Relevant», älter als 1 Jahr",
+    ordner: "inbox",
+    filter: () => `inferenceClassification eq 'focused' and receivedDateTime lt ${vorTagen(365).toISOString()} and ${H_SCHUTZ}`,
   },
   alt_anhaenge: {
     titel: "Mails mit Anhang, älter als 2 Jahre",
@@ -158,13 +169,16 @@ const hotmailAufraeumer: Aufraeumer = {
     return { kategorien, papierkorb: g.totalItemCount ?? 0 };
   },
 
-  async stichprobe(account, kategorie) {
-    const r = (await (await graph(account, hListe(kategorie, "", 500, "id,subject,from"))).json()) as {
+  async seite(account, kategorie, cursor) {
+    // Der Cursor ist der «nextLink» von Microsoft (vollständige Adresse).
+    const r = (await (await graph(account, cursor ?? hListe(kategorie, "", 500, "id,subject,from"))).json()) as {
       value: { subject?: string; from?: { emailAddress?: { address?: string; name?: string } } }[];
+      "@odata.nextLink"?: string;
     };
-    return r.value
+    const mails = r.value
       .filter((m) => m.from?.emailAddress?.address)
       .map((m) => ({ adresse: m.from!.emailAddress!.address!, name: m.from!.emailAddress!.name ?? null, betreff: m.subject ?? "" }));
+    return { mails, naechster: r["@odata.nextLink"] ?? null };
   },
 
   async verschieben(account, kategorie, adressen, ende) {
@@ -227,13 +241,17 @@ const imapAufraeumer: Aufraeumer = {
       return { kategorien, papierkorb: st ? (st.messages ?? 0) : 0 };
     }),
 
-  stichprobe: (account, kategorie) =>
+  seite: (account, kategorie, cursor) =>
     withImap(account, async (c) => {
       const pfad = await I_KAT[kategorie].ordner(c);
-      if (!pfad) return [];
+      if (!pfad) return { mails: [], naechster: null };
       const lock = await c.getMailboxLock(pfad);
       try {
-        const uids = ((await c.search(I_KAT[kategorie].suche(), { uid: true })) || []).sort((a, b) => b - a).slice(0, 400);
+        // Von neu nach alt; der Cursor ist die kleinste UID der letzten Seite.
+        const alle = ((await c.search(I_KAT[kategorie].suche(), { uid: true })) || [])
+          .filter((u) => !cursor || u < Number(cursor))
+          .sort((a, b) => b - a);
+        const uids = alle.slice(0, 400);
         const mails: StichprobenMail[] = [];
         if (uids.length) {
           for await (const m of c.fetch(uids, { uid: true, envelope: true }, { uid: true })) {
@@ -241,7 +259,7 @@ const imapAufraeumer: Aufraeumer = {
             if (von?.address) mails.push({ adresse: von.address, name: von.name || null, betreff: m.envelope?.subject ?? "" });
           }
         }
-        return mails;
+        return { mails, naechster: alle.length > uids.length ? String(uids[uids.length - 1]) : null };
       } finally {
         lock.release();
       }
@@ -289,7 +307,7 @@ export interface Bewertet extends AbsenderGruppe {
 }
 
 /**
- * Stichprobe nach Absender gruppieren, bereits entschiedene Absender auslassen und bis zu 40 neue
+ * Eine Seite nach Absender gruppieren, bereits entschiedene Absender auslassen und bis zu 40 neue
  * von Claude bewerten lassen. Die Urteile werden gespeichert, damit niemand zweimal gefragt wird.
  */
 export async function neueAbsenderBewerten(
@@ -297,16 +315,19 @@ export async function neueAbsenderBewerten(
   kategorie: string,
   frist: number,
   zusaetzlichBekannt: string[] = [],
-): Promise<{ bewertet: Bewertet[]; weitere: number }> {
+  cursor: string | null = null,
+): Promise<{ bewertet: Bewertet[]; weitere: number; naechster: string | null; seitenAbsender: string[]; geprueft: number }> {
   const a = aufraeumerFuer(account);
-  const [mails, { data: bekannt }] = await Promise.all([
-    a.stichprobe(account, kategorie),
+  const [{ mails, naechster }, { data: bekannt }] = await Promise.all([
+    a.seite(account, kategorie, cursor),
     db().from("aufraeum_absender").select("adresse").eq("account_id", account.id).eq("kategorie", kategorie),
   ]);
   const schonDa = new Set([...(bekannt ?? []).map((b) => b.adresse as string), ...zusaetzlichBekannt]);
-  const alle = nachAbsender(mails, 1000).filter((g) => !schonDa.has(g.adresse));
+  const gruppenAlle = nachAbsender(mails, 1000);
+  const seitenAbsender = gruppenAlle.map((g) => g.adresse);
+  const alle = gruppenAlle.filter((g) => !schonDa.has(g.adresse));
   const gruppen = alle.slice(0, 40);
-  if (!gruppen.length) return { bewertet: [], weitere: 0 };
+  if (!gruppen.length) return { bewertet: [], weitere: 0, naechster, seitenAbsender, geprueft: mails.length };
 
   const urteile = await muellBewerten(gruppen, a.kategorien[kategorie], frist);
   const bewertet: Bewertet[] = gruppen.map((g) => ({
@@ -330,7 +351,59 @@ export async function neueAbsenderBewerten(
       })),
       { onConflict: "account_id,kategorie,adresse" },
     );
-  return { bewertet, weitere: alle.length - gruppen.length };
+  return { bewertet, weitere: alle.length - gruppen.length, naechster, seitenAbsender, geprueft: mails.length };
+}
+
+/**
+ * Ein Schritt durch alle Mails einer Kategorie (alle Jahre), seitenweise mit gespeicherter Stelle:
+ * neue Absender der Seite bewerten, Müll-Absender der Seite in den Papierkorb (alle ihre Mails dieser Kategorie).
+ */
+export async function aufraeumSchritt(
+  account: AccountRow,
+  kategorie: string,
+  start: number,
+  von: "mail" | "sven",
+): Promise<{ verschoben: number; unsicher: number; geprueft: number; kategorieFertig: boolean }> {
+  const { data: stand } = await db()
+    .from("aufraeum_stand")
+    .select("cursor, gepruefte_mails")
+    .eq("account_id", account.id)
+    .eq("kategorie", kategorie)
+    .maybeSingle();
+  const r = await neueAbsenderBewerten(account, kategorie, start + 18_000, [], stand?.cursor ?? null);
+
+  const { data: muell } = r.seitenAbsender.length
+    ? await db()
+        .from("aufraeum_absender")
+        .select("adresse")
+        .eq("account_id", account.id)
+        .eq("kategorie", kategorie)
+        .eq("urteil", "muell")
+        .in("adresse", r.seitenAbsender)
+    : { data: [] };
+  const v = await absenderVerschieben(account, kategorie, (muell ?? []).map((m) => m.adresse as string), start + 25_000, von);
+
+  // Erst weiterblättern, wenn diese Seite ganz bewertet und aufgeräumt ist.
+  const seiteFertig = r.weitere === 0 && v.rest.length === 0;
+  const kategorieFertig = seiteFertig && r.naechster === null;
+  const jetzt = new Date().toISOString();
+  await db()
+    .from("aufraeum_stand")
+    .upsert({
+      account_id: account.id,
+      kategorie,
+      zuletzt: jetzt,
+      fehler: null,
+      cursor: seiteFertig ? r.naechster : (stand?.cursor ?? null),
+      gepruefte_mails: kategorieFertig ? 0 : (stand?.gepruefte_mails ?? 0) + (seiteFertig ? r.geprueft : 0),
+      ...(kategorieFertig ? { durchgang_fertig_am: jetzt } : {}),
+    });
+  return {
+    verschoben: v.verschoben,
+    unsicher: r.bewertet.filter((b) => b.urteil === "unsicher").length,
+    geprueft: (stand?.gepruefte_mails ?? 0) + r.geprueft,
+    kategorieFertig,
+  };
 }
 
 /** Mails der Absender in den Papierkorb und die Anzahl je Absender nachführen. */

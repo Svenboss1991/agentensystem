@@ -4,6 +4,7 @@ import { Knopf } from "./ui";
 
 interface Schritt {
   titel?: string;
+  geprueft?: number;
   verschoben: number;
   unsicher: number;
   weiter: number | null;
@@ -27,7 +28,9 @@ export default function JetztAufraeumen({ accountId, fertig }: { accountId: stri
         unsicher += r.unsicher;
         index = r.weiter;
         fehlversuche = 0;
-        setMeldung(`${r.titel ?? ""}: bisher ${verschoben.toLocaleString("de-CH")} Mails in den Papierkorb …`);
+        setMeldung(
+          `${r.titel ?? ""}: ${(r.geprueft ?? 0).toLocaleString("de-CH")} Mails geprüft · insgesamt ${verschoben.toLocaleString("de-CH")} in den Papierkorb …`,
+        );
       } catch (e) {
         // Zeitüberschreitung o. Ä.: nochmals versuchen, nach drei Fehlern aufhören.
         if (++fehlversuche >= 3) {
@@ -51,6 +54,11 @@ export default function JetztAufraeumen({ accountId, fertig }: { accountId: stri
         {laeuft ? "Räumt auf …" : "Jetzt aufräumen"}
       </Knopf>
       {meldung && <p className="max-w-xs text-right text-xs text-stone-500">{meldung}</p>}
+      {laeuft && (
+        <p className="max-w-xs text-right text-xs text-stone-400">
+          Geht durch alle Jahre, das kann dauern. Schliesst du die Seite, macht der Agent automatisch weiter.
+        </p>
+      )}
     </div>
   );
 }

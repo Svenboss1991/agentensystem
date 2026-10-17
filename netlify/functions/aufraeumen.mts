@@ -1,5 +1,5 @@
 import { json, nichtSven } from "../lib/auth.js";
-import { absenderVerschieben, aufraeumerFuer, neueAbsenderBewerten } from "../lib/aufraeumen.js";
+import { absenderVerschieben, aufraeumerFuer, aufraeumSchritt, neueAbsenderBewerten } from "../lib/aufraeumen.js";
 import { istZeitproblem } from "../lib/claude.js";
 import { db, type AccountRow } from "../lib/db.js";
 
@@ -27,26 +27,19 @@ export default async (req: Request) => {
     if (body.aktion === "vorschau") return json(200, await aufraeumerFuer(account).vorschau(account));
 
     if (body.aktion === "schritt") {
-      // «Jetzt aufräumen»: eine Kategorie bearbeiten wie der automatische Lauf. Die Seite ruft wiederholt auf,
-      // bis «weiter» null ist.
+      // «Jetzt aufräumen»: wie der automatische Lauf, Seite für Seite durch alle Jahre.
+      // Die Seite ruft wiederholt auf, bis «weiter» null ist.
       const kategorien = Object.keys(aufraeumerFuer(account).kategorien);
       const index = Number((body as { index?: number }).index ?? 0);
       const key = kategorien[index];
       if (!key) return json(200, { verschoben: 0, unsicher: 0, weiter: null });
-      const { bewertet, weitere } = await neueAbsenderBewerten(account, key, start + 18_000);
-      const { data: muell } = await db()
-        .from("aufraeum_absender")
-        .select("adresse")
-        .eq("account_id", account.id)
-        .eq("kategorie", key)
-        .eq("urteil", "muell");
-      const r = await absenderVerschieben(account, key, (muell ?? []).map((m) => m.adresse as string), start + 25_000, "sven");
-      const nochArbeit = weitere > 0 || r.rest.length > 0;
+      const r = await aufraeumSchritt(account, key, start, "sven");
       return json(200, {
         titel: aufraeumerFuer(account).kategorien[key],
         verschoben: r.verschoben,
-        unsicher: bewertet.filter((b) => b.urteil === "unsicher").length,
-        weiter: nochArbeit ? index : index + 1 < kategorien.length ? index + 1 : null,
+        unsicher: r.unsicher,
+        geprueft: r.geprueft,
+        weiter: !r.kategorieFertig ? index : index + 1 < kategorien.length ? index + 1 : null,
       });
     }
 

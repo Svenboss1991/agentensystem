@@ -6,7 +6,8 @@ const API = "https://graph.microsoft.com/v1.0/me";
 
 export async function graph(account: AccountRow, path: string, init?: RequestInit): Promise<Response> {
   const token = await accessToken(account);
-  const res = await fetch(`${API}${path}`, {
+  // Vollständige Adressen (z. B. «nextLink» beim Blättern) unverändert verwenden.
+  const res = await fetch(path.startsWith("https://") ? path : `${API}${path}`, {
     ...init,
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...init?.headers },
   });
