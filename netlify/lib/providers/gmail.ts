@@ -11,8 +11,10 @@ export async function gmail<T>(account: AccountRow, path: string, init?: Request
     ...init,
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...init?.headers },
   });
-  if (!res.ok) throw new Error(`Gmail ${path}: ${res.status} ${await res.text()}`);
-  return (await res.json()) as T;
+  if (!res.ok) throw new Error(`Gmail ${path.split("?")[0]}: ${res.status} ${await res.text()}`);
+  // Manche Aufrufe (z. B. batchModify) antworten ohne Inhalt.
+  const text = await res.text();
+  return (text ? JSON.parse(text) : {}) as T;
 }
 
 async function lesen(account: AccountRow, ordner: "inbox" | "sent", seit: Date, max: number, prefix: string) {
