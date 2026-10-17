@@ -26,6 +26,30 @@ export default async (req: Request) => {
   try {
     if (body.aktion === "vorschau") return json(200, await aufraeumerFuer(account).vorschau(account));
 
+    if (body.aktion === "schritt") {
+      // «Jetzt aufräumen»: eine Kategorie bearbeiten wie der automatische Lauf. Die Seite ruft wiederholt auf,
+      // bis «weiter» null ist.
+      const kategorien = Object.keys(aufraeumerFuer(account).kategorien);
+      const index = Number((body as { index?: number }).index ?? 0);
+      const key = kategorien[index];
+      if (!key) return json(200, { verschoben: 0, unsicher: 0, weiter: null });
+      const { bewertet, weitere } = await neueAbsenderBewerten(account, key, start + 18_000);
+      const { data: muell } = await db()
+        .from("aufraeum_absender")
+        .select("adresse")
+        .eq("account_id", account.id)
+        .eq("kategorie", key)
+        .eq("urteil", "muell");
+      const r = await absenderVerschieben(account, key, (muell ?? []).map((m) => m.adresse as string), start + 25_000, "sven");
+      const nochArbeit = weitere > 0 || r.rest.length > 0;
+      return json(200, {
+        titel: aufraeumerFuer(account).kategorien[key],
+        verschoben: r.verschoben,
+        unsicher: bewertet.filter((b) => b.urteil === "unsicher").length,
+        weiter: nochArbeit ? index : index + 1 < kategorien.length ? index + 1 : null,
+      });
+    }
+
     if (!aufraeumerFuer(account).kategorien[kategorie]) return json(400, { fehler: "Unbekannte Kategorie" });
 
     if (body.aktion === "analyse") {

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { Postfach } from "./Heute";
 import { MARKEN, oauthStarten, supabase, zeit } from "./lib/supabase";
 import Aufraeumen from "./Aufraeumen";
+import JetztAufraeumen from "./JetztAufraeumen";
 import { Abschnitt, Karte, Knopf } from "./ui";
 
 /** Status aller Postfächer; Gmail/Hotmail lassen sich hier verbinden. */
@@ -70,7 +71,14 @@ export default function Postfaecher({ postfaecher, neuLaden }: { postfaecher: Po
                     automatisch aufräumen
                   </label>
                 )}
-                {p.aktiv && aufraeumen !== p.id && <Knopf onClick={() => setAufraeumen(p.id)}>Aufräumen</Knopf>}
+                {p.aktiv && aufraeumen !== p.id && (
+                  <div className="flex items-start gap-3">
+                    <button onClick={() => setAufraeumen(p.id)} className="mt-2 text-xs text-stone-400 underline">
+                      Details
+                    </button>
+                    <JetztAufraeumen accountId={p.id} fertig={neuLaden} />
+                  </div>
+                )}
                 {p.aktiv && aufraeumen === p.id && (
                   <div className="w-full">
                     <Aufraeumen
