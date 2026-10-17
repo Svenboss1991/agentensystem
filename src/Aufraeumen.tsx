@@ -199,7 +199,7 @@ export default function Aufraeumen({
             </Knopf>
             {weitere > 0 && (
               <Knopf onClick={() => pruefen(kategorie, absender)} disabled={laeuft}>
-                Weitere {Math.min(weitere, 40)} Absender prüfen
+                Weitere {Math.min(weitere, 15)} Absender prüfen
               </Knopf>
             )}
             {status && <span className="text-xs text-stone-600">{status}</span>}

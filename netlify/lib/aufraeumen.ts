@@ -1,5 +1,5 @@
 import type { ImapFlow } from "imapflow";
-import { muellBewerten, nachAbsender, type AbsenderGruppe } from "./claude.js";
+import { istZeitproblem, muellBewerten, nachAbsender, type AbsenderGruppe } from "./claude.js";
 import { db, log, type AccountRow } from "./db.js";
 import { gmail } from "./providers/gmail.js";
 import { withImap } from "./providers/imap.js";
@@ -384,10 +384,18 @@ export async function neueAbsenderBewerten(
   const gruppenAlle = nachAbsender(mails, 1000);
   const seitenAbsender = gruppenAlle.map((g) => g.adresse);
   const alle = gruppenAlle.filter((g) => !schonDa.has(g.adresse));
-  const gruppen = alle.slice(0, 40);
+  // Kleine Portionen, damit Claude innerhalb des Zeitlimits einer Netlify-Funktion antwortet.
+  const gruppen = alle.slice(0, 15);
   if (!gruppen.length) return { bewertet: [], weitere: 0, naechster, seitenAbsender, geprueft: mails.length };
 
-  const urteile = await muellBewerten(gruppen, a.kategorien[kategorie], frist);
+  let urteile: Awaited<ReturnType<typeof muellBewerten>>;
+  try {
+    urteile = await muellBewerten(gruppen, a.kategorien[kategorie], frist);
+  } catch (err) {
+    // Zu wenig Zeit übrig: diese Absender im nächsten Schritt bewerten statt abzubrechen.
+    if (istZeitproblem(err)) return { bewertet: [], weitere: alle.length, naechster, seitenAbsender, geprueft: mails.length };
+    throw err;
+  }
   const bewertet: Bewertet[] = gruppen.map((g) => ({
     ...g,
     ...(urteile.get(g.adresse) ?? { urteil: "unsicher" as const, grund: "nicht bewertet" }),
@@ -428,7 +436,7 @@ export async function aufraeumSchritt(
     .eq("account_id", account.id)
     .eq("kategorie", kategorie)
     .maybeSingle();
-  const r = await neueAbsenderBewerten(account, kategorie, start + 18_000, [], stand?.cursor ?? null);
+  const r = await neueAbsenderBewerten(account, kategorie, start + 23_000, [], stand?.cursor ?? null);
 
   const { data: muell } = r.seitenAbsender.length
     ? await db()
@@ -439,7 +447,7 @@ export async function aufraeumSchritt(
         .eq("urteil", "muell")
         .in("adresse", r.seitenAbsender)
     : { data: [] };
-  const v = await absenderVerschieben(account, kategorie, (muell ?? []).map((m) => m.adresse as string), start + 25_000, von);
+  const v = await absenderVerschieben(account, kategorie, (muell ?? []).map((m) => m.adresse as string), start + 26_000, von);
 
   // Erst weiterblättern, wenn diese Seite ganz bewertet und aufgeräumt ist.
   const seiteFertig = r.weitere === 0 && v.rest.length === 0;
