@@ -114,6 +114,26 @@ export const Einordnung = z.object({
       mobil: z.string().nullable(),
     })
     .describe("Nur Angaben, die eindeutig in der Signatur oder im Absender stehen; sonst null. Nichts erfinden."),
+  abo: z
+    .object({
+      ereignis: z.enum(["neu", "testphase", "verlaengerung", "zahlung", "preisaenderung", "kuendigung", "beendet"]),
+      anbieter: z.string().describe("z. B. «Netflix», «Swisscom», «Adobe»"),
+      produkt: z.string().nullable().describe("z. B. «Premium», «Creative Cloud Fotografie»"),
+      betrag: z.number().nullable().describe("Betrag pro Intervall, nur wenn genannt"),
+      waehrung: z.string().nullable().describe("CHF, EUR, USD, MXN …"),
+      intervall: z.enum(["woechentlich", "monatlich", "quartalsweise", "halbjaehrlich", "jaehrlich", "einmalig"]).nullable(),
+      beginn: z.string().nullable().describe("YYYY-MM-DD"),
+      testphase_bis: z.string().nullable().describe("YYYY-MM-DD, letzter Tag der Gratis-/Testphase"),
+      naechste_zahlung: z.string().nullable().describe("YYYY-MM-DD"),
+      laufzeit_bis: z.string().nullable().describe("YYYY-MM-DD, Ende der Mindestlaufzeit"),
+      kuendigungsfrist: z.string().nullable().describe("wörtlich bzw. kurz, z. B. «1 Monat zum Ende der Laufzeit»"),
+      kuendbar_bis: z.string().nullable().describe("YYYY-MM-DD, letzter Tag, um rechtzeitig zu kündigen, nur wenn ableitbar"),
+      konto: z.string().nullable().describe("Login oder Mail-Adresse beim Anbieter"),
+    })
+    .nullable()
+    .describe(
+      "Nur wenn die Mail ein Abo betrifft (Abschluss, Testphase, Verlängerung, Abbuchung, Preisänderung, Kündigung). Nicht bei Werbung für Abos.",
+    ),
 });
 export type Einordnung = z.infer<typeof Einordnung>;
 

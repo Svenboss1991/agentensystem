@@ -1,6 +1,7 @@
 import type { Session } from "@supabase/supabase-js";
 import { useEffect, useState } from "react";
 import { supabase } from "./lib/supabase";
+import { AbosSeite } from "./Abos";
 import { AdressbuchSeite, FirmaSeite, KontaktSeite } from "./Adressbuch";
 import { AkteSeite, AktenSeite } from "./Akten";
 import { DokumenteSeite } from "./Dokumente";
@@ -57,6 +58,7 @@ export default function App() {
   if (firma) return <FirmaSeite key={firma[1]} id={firma[1]} />;
   if (hash.startsWith("#/adressbuch")) return <AdressbuchSeite />;
   if (hash.startsWith("#/dokumente")) return <DokumenteSeite />;
+  if (hash.startsWith("#/abos")) return <AbosSeite />;
   return <Heute />;
 }
 

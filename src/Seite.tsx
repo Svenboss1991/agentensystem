@@ -3,6 +3,7 @@ const LINKS = [
   { href: "#/akten", label: "Akten" },
   { href: "#/adressbuch", label: "Adressbuch" },
   { href: "#/dokumente", label: "Dokumente" },
+  { href: "#/abos", label: "Abos" },
 ];
 
 /** Hauptnavigation oben auf jeder Seite. */

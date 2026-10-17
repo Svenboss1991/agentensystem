@@ -288,6 +288,106 @@ async function kontaktErfassen(row: MessageRow, email: string | null, name: stri
   if (id) await db().from("messages").update({ kontakt_id: id }).eq("id", row.id);
 }
 
+// ─── Abos ────────────────────────────────────────────────────────────────────
+
+type AboInfo = NonNullable<Einordnung["abo"]>;
+
+const STATUS_NACH_EREIGNIS: Record<AboInfo["ereignis"], string | null> = {
+  neu: "aktiv",
+  testphase: "test",
+  verlaengerung: "aktiv",
+  zahlung: null,
+  preisaenderung: null,
+  kuendigung: "gekuendigt",
+  beendet: "beendet",
+};
+
+function tageVorher(datum: string, tage: number): string {
+  const d = new Date(`${datum}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - tage);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Abo anlegen oder nachführen. Svens eigene Angaben bleiben, neue Werte aus der Mail ergänzen oder aktualisieren. */
+async function aboNachfuehren(row: MessageRow, abo: AboInfo, bereich: string): Promise<void> {
+  const { data: treffer } = await db()
+    .from("abos")
+    .select("id, produkt, erinnert_am")
+    .ilike("anbieter", abo.anbieter)
+    .neq("status", "beendet")
+    .order("erstellt_am", { ascending: false });
+  const vorhanden =
+    (treffer ?? []).find((t) => !abo.produkt || !t.produkt || t.produkt.toLowerCase() === abo.produkt.toLowerCase()) ?? null;
+
+  const daten = (d: string | null) => (istDatum(d) ? d : undefined);
+  const werte: Record<string, unknown> = {
+    produkt: abo.produkt ?? undefined,
+    betrag: abo.betrag ?? undefined,
+    waehrung: abo.waehrung ?? undefined,
+    intervall: abo.intervall ?? undefined,
+    beginn: daten(abo.beginn),
+    testphase_bis: daten(abo.testphase_bis),
+    naechste_zahlung: daten(abo.naechste_zahlung),
+    laufzeit_bis: daten(abo.laufzeit_bis),
+    kuendigungsfrist: abo.kuendigungsfrist ?? undefined,
+    kuendbar_bis: daten(abo.kuendbar_bis),
+    konto: abo.konto ?? undefined,
+    status: STATUS_NACH_EREIGNIS[abo.ereignis] ?? undefined,
+    aktualisiert_am: new Date().toISOString(),
+  };
+  // Erinnerung: 2 Tage vor Ende der Testphase bzw. 7 Tage vor der Kündigungsfrist.
+  const erinnern = istDatum(abo.testphase_bis)
+    ? tageVorher(abo.testphase_bis, 2)
+    : istDatum(abo.kuendbar_bis)
+      ? tageVorher(abo.kuendbar_bis, 7)
+      : null;
+  if (erinnern && abo.ereignis !== "kuendigung" && abo.ereignis !== "beendet") {
+    werte.erinnern_am = erinnern;
+    werte.erinnert_am = null;
+  }
+  for (const k of Object.keys(werte)) if (werte[k] === undefined) delete werte[k];
+
+  let aboId: string;
+  if (vorhanden) {
+    aboId = vorhanden.id as string;
+    await db().from("abos").update(werte).eq("id", aboId);
+  } else {
+    const { data, error } = await db()
+      .from("abos")
+      .insert({ anbieter: abo.anbieter, bereich, quelle_message_id: row.id, status: "aktiv", ...werte })
+      .select("id")
+      .single();
+    if (error) throw new Error(`Abo anlegen: ${error.message}`);
+    aboId = data.id as string;
+  }
+  await db().from("messages").update({ abo_id: aboId }).eq("id", row.id);
+  await log("mail", `abo_${abo.ereignis}`, aboId, `${abo.anbieter}${abo.produkt ? ` ${abo.produkt}` : ""}`);
+}
+
+async function aboErinnerungen(): Promise<number> {
+  const { data } = await db()
+    .from("abos")
+    .select("id, anbieter, produkt, status, testphase_bis, kuendbar_bis, kuendigungsfrist, erinnern_am")
+    .in("status", ["test", "aktiv"])
+    .is("erinnert_am", null)
+    .lte("erinnern_am", heute());
+  for (const a of data ?? []) {
+    const name = `${a.anbieter}${a.produkt ? ` ${a.produkt}` : ""}`;
+    await db().from("tasks").insert({
+      titel: a.status === "test" ? `Testphase endet: ${name}` : `Abo prüfen: ${name}`,
+      grund:
+        a.status === "test"
+          ? `Testphase bis ${a.testphase_bis ?? "?"}. Behalten oder vorher kündigen?`
+          : `Kündbar bis ${a.kuendbar_bis ?? "?"}${a.kuendigungsfrist ? ` (${a.kuendigungsfrist})` : ""}. Behalten oder kündigen?`,
+      quelle: "mail",
+      abo_id: a.id,
+      faellig_am: a.testphase_bis ?? a.kuendbar_bis ?? a.erinnern_am,
+    });
+    await db().from("abos").update({ erinnert_am: new Date().toISOString() }).eq("id", a.id);
+  }
+  return data?.length ?? 0;
+}
+
 async function entwurfAnlegen(row: MessageRow, account: AccountRow, e: Einordnung, frist: number): Promise<void> {
   // Bei einem Wiederholungslauf nicht doppelt entwerfen.
   const { count } = await db()
@@ -340,6 +440,10 @@ async function eingangVerarbeiten(row: MessageRow, account: AccountRow, frist: n
 
   const akteId = await akteNachfuehren(row, e.akte, row.absender.toLowerCase(), e.marke === "keine" ? null : e.marke);
   await kontaktErfassen(row, row.absender, row.absender_name, e.absender_details);
+  if (e.abo) {
+    const bereich = e.kategorie === "finanz" ? "finanzen" : e.marke !== "keine" ? e.marke : "privat";
+    await aboNachfuehren(row, e.abo, bereich);
+  }
 
   const brauchtEntwurf = (e.kategorie === "service" || e.kategorie === "geschäftlich") && e.antwort_noetig;
   if (brauchtEntwurf) await entwurfAnlegen(row, account, e, frist);
@@ -594,7 +698,7 @@ export async function mailAgentLauf(frist: number): Promise<string> {
   );
   const neu = ergebnisse.reduce((a, b) => a + b, 0);
 
-  const faellig = (await faelligeAkten()) + (await dokumentErinnerungen());
+  const faellig = (await faelligeAkten()) + (await dokumentErinnerungen()) + (await aboErinnerungen());
   const [{ ok, fehler }, abgelegt] = await Promise.all([offeneVerarbeiten(accounts, frist), ablegen(accounts)]);
   return `${neu} neu, ${ok} verarbeitet, ${abgelegt} abgelegt, ${fehler} Fehler${faellig ? `, ${faellig} Erinnerungen` : ""}`;
 }
