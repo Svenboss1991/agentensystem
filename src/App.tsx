@@ -5,6 +5,8 @@ import { AbosSeite } from "./Abos";
 import { AdressbuchSeite, FirmaSeite, KontaktSeite } from "./Adressbuch";
 import { AkteSeite, AktenSeite } from "./Akten";
 import { DokumenteSeite } from "./Dokumente";
+import { FinanzenSeite } from "./Finanzen";
+import { WertpapierSeite } from "./Wertpapier";
 import Heute from "./Heute";
 
 export default function App() {
@@ -59,6 +61,9 @@ export default function App() {
   if (hash.startsWith("#/adressbuch")) return <AdressbuchSeite />;
   if (hash.startsWith("#/dokumente")) return <DokumenteSeite />;
   if (hash.startsWith("#/abos")) return <AbosSeite />;
+  const papier = hash.match(/^#\/wertpapier\/([\w-]+)/);
+  if (papier) return <WertpapierSeite key={papier[1]} id={papier[1]} />;
+  if (hash.startsWith("#/finanzen")) return <FinanzenSeite />;
   return <Heute />;
 }
 

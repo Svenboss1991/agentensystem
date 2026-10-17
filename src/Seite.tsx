@@ -4,13 +4,15 @@ const LINKS = [
   { href: "#/adressbuch", label: "Adressbuch" },
   { href: "#/dokumente", label: "Dokumente" },
   { href: "#/abos", label: "Abos" },
+  { href: "#/finanzen", label: "Finanzen" },
 ];
 
 /** Hauptnavigation oben auf jeder Seite. */
 export function Navigation() {
   const hash = window.location.hash || "#/";
   const aktiv = (href: string) =>
-    href === "#/" ? hash === "#/" || hash === "" : hash.startsWith(href) || (href === "#/adressbuch" && /^#\/(kontakt|firma)\//.test(hash));
+    href === "#/" ? hash === "#/" || hash === "" : hash.startsWith(href) || (href === "#/adressbuch" && /^#\/(kontakt|firma)\//.test(hash)) ||
+        (href === "#/finanzen" && hash.startsWith("#/wertpapier/"));
   return (
     <nav className="mb-6 flex flex-wrap gap-x-4 gap-y-1 text-sm">
       {LINKS.map((l) => (
