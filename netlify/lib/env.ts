@@ -1,5 +1,11 @@
+// Die Supabase-Werte stehen für die Seite schon als VITE_… bereit; die Funktionen dürfen sie mitbenutzen.
+const ERSATZ: Record<string, string> = {
+  SUPABASE_URL: "VITE_SUPABASE_URL",
+  SUPABASE_ANON_KEY: "VITE_SUPABASE_ANON_KEY",
+};
+
 export function env(name: string): string {
-  const value = process.env[name];
+  const value = process.env[name] || (ERSATZ[name] ? process.env[ERSATZ[name]] : undefined);
   if (!value) throw new Error(`Umgebungsvariable ${name} fehlt`);
   return value;
 }

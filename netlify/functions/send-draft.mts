@@ -1,4 +1,4 @@
-import { json, kommtVonSven } from "../lib/auth.js";
+import { json, nichtSven } from "../lib/auth.js";
 import { db, log, type AccountRow, type MessageRow } from "../lib/db.js";
 import { providerFor } from "../lib/providers/index.js";
 
@@ -9,7 +9,8 @@ import { providerFor } from "../lib/providers/index.js";
 export default async (req: Request) => {
   if (req.method !== "POST") return json(405, { fehler: "Nur POST" });
 
-  if (!(await kommtVonSven(req))) return json(403, { fehler: "Nur Sven darf senden" });
+  const verweigert = await nichtSven(req);
+  if (verweigert) return json(403, { fehler: `Nicht erlaubt: ${verweigert}` });
 
   const { draft_id, text } = (await req.json().catch(() => ({}))) as { draft_id?: string; text?: string };
   if (!draft_id) return json(400, { fehler: "draft_id fehlt" });
