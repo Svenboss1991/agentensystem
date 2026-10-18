@@ -1,7 +1,7 @@
 import { json, nichtSven } from "../lib/auth.js";
 import { absenderVerschieben, aufraeumerFuer, aufraeumSchritt, istWoche, neueAbsenderBewerten } from "../lib/aufraeumen.js";
 import { istZeitproblem } from "../lib/claude.js";
-import { db, type AccountRow } from "../lib/db.js";
+import { db, log, type AccountRow } from "../lib/db.js";
 
 // Aufräumen von Hand (Knopf «Aufräumen» bei einem Postfach) und Svens Entscheide bei unsicheren Absendern.
 
@@ -18,6 +18,8 @@ export default async (req: Request) => {
     absender?: string[];
     bekannt?: string[];
     urteil?: "muell" | "behalten";
+    ids?: string[];
+    merken?: boolean;
   };
   const { data: account } = await db().from("accounts").select("*").eq("id", body.account_id ?? "").maybeSingle<AccountRow>();
   if (!account?.aktiv) return json(400, { fehler: "Postfach nicht gefunden oder nicht verbunden" });
@@ -37,12 +39,63 @@ export default async (req: Request) => {
       return json(200, {
         titel: aufraeumerFuer(account).kategorien[key],
         verschoben: r.verschoben,
+        vorgelegt: r.vorgelegt,
         muell: r.muell,
         behalten: r.behalten,
         unsicher: r.unsicher,
         geprueft: r.geprueft,
         weiter: !r.kategorieFertig ? index : index + 1 < kategorien.length ? index + 1 : null,
       });
+    }
+
+    if (body.aktion === "vorlage_lesen") {
+      // Eine vorgelegte Mail ganz anzeigen.
+      const { data: v } = await db().from("aufraeum_vorlage").select("kategorie, mail_id").eq("id", body.ids?.[0] ?? "").eq("account_id", account.id).maybeSingle();
+      if (!v) return json(404, { fehler: "Mail nicht gefunden" });
+      return json(200, { mail: await aufraeumerFuer(account).mailLesen(account, v.kategorie, v.mail_id) });
+    }
+
+    if (body.aktion === "vorlage_entscheiden") {
+      // Sven entscheidet über vorgelegte Mails (höchstens 300 pro Aufruf, die Seite schickt den Rest nach).
+      const { data: zeilen } = await db()
+        .from("aufraeum_vorlage")
+        .select("id, kategorie, mail_id, adresse, name")
+        .eq("account_id", account.id)
+        .eq("status", "offen")
+        .in("id", (body.ids ?? []).slice(0, 300));
+      const liste = zeilen ?? [];
+      if (body.urteil === "muell") {
+        const nachKategorie = new Map<string, string[]>();
+        for (const z of liste) nachKategorie.set(z.kategorie, [...(nachKategorie.get(z.kategorie) ?? []), z.mail_id]);
+        for (const [k, ids] of nachKategorie) await aufraeumerFuer(account).einzelnVerschieben(account, k, ids);
+        if (liste.length) await log("sven", "aufgeraeumt", account.adresse, `${liste.length} vorgelegte Mails in den Papierkorb`);
+        // «Alle von diesem Absender»: auch künftig als Müll behandeln.
+        if (body.merken) {
+          const absender = new Map(liste.map((z) => [`${z.kategorie}|${z.adresse}`, z]));
+          await db()
+            .from("aufraeum_absender")
+            .upsert(
+              [...absender.values()].map((z) => ({
+                account_id: account.id,
+                kategorie: z.kategorie,
+                adresse: z.adresse,
+                name: z.name,
+                urteil: "muell",
+                grund: "von Sven entschieden",
+                entschieden_von: "sven",
+                aktualisiert_am: new Date().toISOString(),
+              })),
+              { onConflict: "account_id,kategorie,adresse" },
+            );
+        }
+      }
+      if (liste.length) {
+        await db()
+          .from("aufraeum_vorlage")
+          .update({ status: body.urteil === "muell" ? "papierkorb" : "behalten", entschieden_am: new Date().toISOString() })
+          .in("id", liste.map((z) => z.id));
+      }
+      return json(200, { erledigt: liste.length });
     }
 
     if (!aufraeumerFuer(account).kategorien[kategorie]) return json(400, { fehler: "Unbekannte Kategorie" });

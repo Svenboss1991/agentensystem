@@ -1,5 +1,5 @@
 import type { ImapFlow } from "imapflow";
-import { einzelnBewerten, istZeitproblem, muellBewerten, nachAbsender, type AbsenderGruppe } from "./claude.js";
+import { istZeitproblem, werbungErkennen, muellBewerten, nachAbsender, type AbsenderGruppe } from "./claude.js";
 import { db, log, type AccountRow } from "./db.js";
 import { gmail } from "./providers/gmail.js";
 import { withImap } from "./providers/imap.js";
@@ -11,8 +11,9 @@ import { graph } from "./providers/outlook.js";
 // nie endgültig. Markierte (Stern/Fahne) und wichtige Mails bleiben unberührt.
 
 export interface StichprobenMail {
-  /** Nur wo der Anbieter einzelne Mails verschieben kann (siehe `einzelnVerschieben`). */
+  /** Kennung beim Anbieter, für einzelne Mails (vorlegen, verschieben, lesen). */
   id?: string;
+  datum?: string;
   adresse: string;
   name: string | null;
   betreff: string;
@@ -25,7 +26,7 @@ export interface BeispielMail {
 }
 
 const KUERZEN = 20_000;
-const kurz = (t: string) => (t.length > KUERZEN ? `${t.slice(0, KUERZEN)}\n[… gekürzt]` : t);
+const kurz = (t: string, max = KUERZEN) => (t.length > max ? `${Array.from(t.slice(0, max + 1)).slice(0, max).join("")}\n[… gekürzt]` : t);
 
 export interface Aufraeumer {
   kategorien: Record<string, string>; // key → Titel
@@ -36,11 +37,18 @@ export interface Aufraeumer {
   verschieben(account: AccountRow, kategorie: string, adressen: string[], ende: number): Promise<{ verschoben: number; rest: string[] }>;
   /** Die neuesten Mails eines Absenders in dieser Kategorie, mit ganzem Text (zum Entscheiden). */
   beispiele(account: AccountRow, kategorie: string, adresse: string, max: number): Promise<BeispielMail[]>;
-  /** Einzelne Mails (nach id) in den Papierkorb, z. B. Werbung von Absendern, die sonst behalten werden. */
-  einzelnVerschieben?(account: AccountRow, ids: string[]): Promise<void>;
+  /** Einzelne Mails (nach id) in den Papierkorb. */
+  einzelnVerschieben(account: AccountRow, kategorie: string, ids: string[]): Promise<void>;
+  /** Eine einzelne Mail ganz lesen (für Svens Prüfung). */
+  mailLesen(account: AccountRow, kategorie: string, id: string): Promise<BeispielMail>;
 }
 
 const vorTagen = (t: number) => new Date(Date.now() - t * 86_400_000);
+
+/** Werbung wird erst gelöscht, wenn sie älter als 2 Wochen ist. */
+export const WERBUNG_ALT_TAGE = 14;
+/** Spam darf sofort weg; sonst nur Mails, die älter als 2 Wochen sind. */
+const nurAlt = (kategorie: string) => !/spam|junk/.test(kategorie);
 
 /** «…_woche»-Kategorien laufen jeden Montag über die Mails der letzten Woche; die übrigen sind der grosse Durchgang. */
 export const istWoche = (kategorie: string) => kategorie.endsWith("_woche");
@@ -56,11 +64,11 @@ const G_KAT: Record<string, { titel: string; q: string }> = {
   foren: { titel: "Foren und Mailinglisten", q: `category:forums ${G_SCHUTZ}` },
   updates: { titel: "Benachrichtigungen (Tab «Updates»)", q: `category:updates ${G_SCHUTZ}` },
   spam: { titel: "Spam", q: "in:spam" },
-  // Wöchentlich (Montag): nur die Mails der letzten Woche.
-  werbung_woche: { titel: "Werbung der letzten Woche", q: `category:promotions newer_than:8d ${G_SCHUTZ}` },
-  sozial_woche: { titel: "Soziale Netzwerke der letzten Woche", q: `category:social newer_than:8d ${G_SCHUTZ}` },
-  foren_woche: { titel: "Foren der letzten Woche", q: `category:forums newer_than:8d ${G_SCHUTZ}` },
-  updates_woche: { titel: "Benachrichtigungen der letzten Woche", q: `category:updates newer_than:8d ${G_SCHUTZ}` },
+  // Wöchentlich (Montag): die letzten gut 3 Wochen, damit jede Werbung einmal mit über 2 Wochen Alter drankommt.
+  werbung_woche: { titel: "Werbung der letzten Woche", q: `category:promotions newer_than:22d ${G_SCHUTZ}` },
+  sozial_woche: { titel: "Soziale Netzwerke der letzten Woche", q: `category:social newer_than:22d ${G_SCHUTZ}` },
+  foren_woche: { titel: "Foren der letzten Woche", q: `category:forums newer_than:22d ${G_SCHUTZ}` },
+  updates_woche: { titel: "Benachrichtigungen der letzten Woche", q: `category:updates newer_than:22d ${G_SCHUTZ}` },
   spam_woche: { titel: "Spam der letzten Woche", q: "in:spam newer_than:8d" },
 };
 
@@ -101,7 +109,7 @@ const gmailAufraeumer: Aufraeumer = {
     for (let i = 0; i < ids.length; i += 10) {
       const teil = await Promise.all(
         ids.slice(i, i + 10).map((id) =>
-          gmail<{ payload?: { headers?: { name: string; value: string }[] } }>(
+          gmail<{ internalDate?: string; payload?: { headers?: { name: string; value: string }[] } }>(
             account,
             `/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`,
           ),
@@ -109,7 +117,8 @@ const gmailAufraeumer: Aufraeumer = {
       );
       for (const m of teil) {
         const h = (name: string) => m.payload?.headers?.find((x) => x.name.toLowerCase() === name)?.value ?? "";
-        mails.push({ id: ids[n++], ...absenderZerlegen(h("from")), betreff: h("subject") });
+        const datum = m.internalDate ? new Date(Number(m.internalDate)).toISOString() : undefined;
+        mails.push({ id: ids[n++], datum, ...absenderZerlegen(h("from")), betreff: h("subject") });
       }
     }
     return { mails, naechster: liste.nextPageToken ?? null };
@@ -132,7 +141,8 @@ const gmailAufraeumer: Aufraeumer = {
     const rest = [...adressen];
     while (rest.length && Date.now() < ende) {
       const adresse = rest[0].replace(/[^\w.@+-]/g, "");
-      const ids = ((await gmail<GListe>(account, gPfad(`${G_KAT[kategorie].q} from:${adresse}`, 500))).messages ?? []).map((m) => m.id);
+      const alt = nurAlt(kategorie) ? ` older_than:${WERBUNG_ALT_TAGE}d` : "";
+      const ids = ((await gmail<GListe>(account, gPfad(`${G_KAT[kategorie].q}${alt} from:${adresse}`, 500))).messages ?? []).map((m) => m.id);
       if (!ids.length) {
         rest.shift();
         continue;
@@ -146,13 +156,19 @@ const gmailAufraeumer: Aufraeumer = {
     return { verschoben, rest };
   },
 
-  async einzelnVerschieben(account, ids) {
+  async einzelnVerschieben(account, _kategorie, ids) {
     for (let i = 0; i < ids.length; i += 500) {
       await gmail(account, "/messages/batchModify", {
         method: "POST",
         body: JSON.stringify({ ids: ids.slice(i, i + 500), addLabelIds: ["TRASH"], removeLabelIds: ["INBOX", "SPAM"] }),
       });
     }
+  },
+
+  async mailLesen(account, _kategorie, id) {
+    const m = await gmail<{ raw: string; internalDate: string }>(account, `/messages/${encodeURIComponent(id)}?format=raw`);
+    const p = await parseRaw(Buffer.from(m.raw, "base64url"), id, null, new Date(Number(m.internalDate)));
+    return { betreff: p.betreff, datum: p.empfangenAm.toISOString(), text: kurz(p.text, 20_000) };
   },
 };
 
@@ -179,7 +195,7 @@ const H_KAT: Record<string, { titel: string; ordner: string; filter: () => strin
   sonstige_woche: {
     titel: "«Sonstige» der letzten Woche",
     ordner: "inbox",
-    filter: () => `inferenceClassification eq 'other' and receivedDateTime ge ${vorTagen(8).toISOString()} and ${H_SCHUTZ}`,
+    filter: () => `inferenceClassification eq 'other' and receivedDateTime ge ${vorTagen(22).toISOString()} and ${H_SCHUTZ}`,
   },
   junk_woche: { titel: "Junk der letzten Woche", ordner: "junkemail", filter: () => `receivedDateTime ge ${vorTagen(8).toISOString()}` },
 };
@@ -228,13 +244,19 @@ const hotmailAufraeumer: Aufraeumer = {
 
   async seite(account, kategorie, cursor) {
     // Der Cursor ist der «nextLink» von Microsoft (vollständige Adresse).
-    const r = (await (await graph(account, cursor ?? hListe(kategorie, "", 500, "id,subject,from"))).json()) as {
-      value: { subject?: string; from?: { emailAddress?: { address?: string; name?: string } } }[];
+    const r = (await (await graph(account, cursor ?? hListe(kategorie, "", 500, "id,subject,from,receivedDateTime"))).json()) as {
+      value: { id: string; subject?: string; receivedDateTime?: string; from?: { emailAddress?: { address?: string; name?: string } } }[];
       "@odata.nextLink"?: string;
     };
     const mails = r.value
       .filter((m) => m.from?.emailAddress?.address)
-      .map((m) => ({ adresse: m.from!.emailAddress!.address!, name: m.from!.emailAddress!.name ?? null, betreff: m.subject ?? "" }));
+      .map((m) => ({
+        id: m.id,
+        datum: m.receivedDateTime,
+        adresse: m.from!.emailAddress!.address!,
+        name: m.from!.emailAddress!.name ?? null,
+        betreff: m.subject ?? "",
+      }));
     return { mails, naechster: r["@odata.nextLink"] ?? null };
   },
 
@@ -254,8 +276,9 @@ const hotmailAufraeumer: Aufraeumer = {
     const rest = [...adressen];
     while (rest.length && Date.now() < ende) {
       const adresse = rest[0].replace(/'/g, "''");
+      const alt = nurAlt(kategorie) ? ` and receivedDateTime lt ${vorTagen(WERBUNG_ALT_TAGE).toISOString()}` : "";
       const ids = (
-        (await (await graph(account, hListe(kategorie, ` and from/emailAddress/address eq '${adresse}'`, 100, "id"))).json()) as {
+        (await (await graph(account, hListe(kategorie, ` and from/emailAddress/address eq '${adresse}'${alt}`, 100, "id"))).json()) as {
           value: { id: string }[];
         }
       ).value.map((m) => m.id);
@@ -269,6 +292,19 @@ const hotmailAufraeumer: Aufraeumer = {
       verschoben += n;
     }
     return { verschoben, rest };
+  },
+
+  async einzelnVerschieben(account, _kategorie, ids) {
+    await hVerschieben(account, ids);
+  },
+
+  async mailLesen(account, _kategorie, id) {
+    const m = (await (
+      await graph(account, `/messages/${encodeURIComponent(id)}?$select=subject,body,receivedDateTime`, {
+        headers: { Prefer: 'outlook.body-content-type="text"' },
+      })
+    ).json()) as { subject?: string; receivedDateTime: string; body?: { content?: string } };
+    return { betreff: m.subject ?? null, datum: m.receivedDateTime, text: kurz(m.body?.content ?? "", 20_000) };
   },
 };
 
@@ -327,9 +363,17 @@ const imapAufraeumer: Aufraeumer = {
         const uids = alle.slice(0, 400);
         const mails: StichprobenMail[] = [];
         if (uids.length) {
-          for await (const m of c.fetch(uids, { uid: true, envelope: true }, { uid: true })) {
+          for await (const m of c.fetch(uids, { uid: true, envelope: true, internalDate: true }, { uid: true })) {
             const von = m.envelope?.from?.[0];
-            if (von?.address) mails.push({ adresse: von.address, name: von.name || null, betreff: m.envelope?.subject ?? "" });
+            const d = m.internalDate ?? m.envelope?.date;
+            if (von?.address)
+              mails.push({
+                id: String(m.uid),
+                datum: d ? new Date(d).toISOString() : undefined,
+                adresse: von.address,
+                name: von.name || null,
+                betreff: m.envelope?.subject ?? "",
+              });
           }
         }
         return { mails, naechster: alle.length > uids.length ? String(uids[uids.length - 1]) : null };
@@ -371,7 +415,8 @@ const imapAufraeumer: Aufraeumer = {
       const lock = await c.getMailboxLock(pfad);
       try {
         while (rest.length && Date.now() < ende) {
-          const uids = (await c.search({ ...I_KAT[kategorie].suche(), from: rest[0] }, { uid: true })) || [];
+          const alt = nurAlt(kategorie) ? { before: vorTagen(WERBUNG_ALT_TAGE) } : {};
+          const uids = (await c.search({ ...I_KAT[kategorie].suche(), ...alt, from: rest[0] }, { uid: true })) || [];
           // IMAP sucht «from» als Teilstring; nur exakt passende Absender verschieben.
           const passend: number[] = [];
           if (uids.length) {
@@ -387,6 +432,34 @@ const imapAufraeumer: Aufraeumer = {
         lock.release();
       }
       return { verschoben, rest };
+    }),
+
+  einzelnVerschieben: (account, kategorie, ids) =>
+    withImap(account, async (c) => {
+      const pfad = await I_KAT[kategorie].ordner(c);
+      const ziel = await iPapierkorb(c);
+      if (!pfad || !ziel) throw new Error("Papierkorb-Ordner nicht gefunden");
+      const lock = await c.getMailboxLock(pfad);
+      try {
+        await c.messageMove(ids.map(Number), ziel, { uid: true });
+      } finally {
+        lock.release();
+      }
+    }),
+
+  mailLesen: (account, kategorie, id) =>
+    withImap(account, async (c) => {
+      const pfad = await I_KAT[kategorie].ordner(c);
+      if (!pfad) throw new Error("Ordner nicht gefunden");
+      const lock = await c.getMailboxLock(pfad);
+      try {
+        const m = await c.fetchOne(id, { uid: true, source: true, internalDate: true }, { uid: true });
+        if (!m || !m.source) throw new Error("Mail nicht mehr vorhanden");
+        const p = await parseRaw(m.source, id, null, m.internalDate ? new Date(m.internalDate) : undefined);
+        return { betreff: p.betreff, datum: p.empfangenAm.toISOString(), text: kurz(p.text, 20_000) };
+      } finally {
+        lock.release();
+      }
     }),
 };
 
@@ -468,7 +541,15 @@ export async function aufraeumSchritt(
   kategorie: string,
   start: number,
   von: "mail" | "sven",
-): Promise<{ verschoben: number; muell: number; behalten: number; unsicher: number; geprueft: number; kategorieFertig: boolean }> {
+): Promise<{
+  verschoben: number;
+  vorgelegt: number;
+  muell: number;
+  behalten: number;
+  unsicher: number;
+  geprueft: number;
+  kategorieFertig: boolean;
+}> {
   const { data: stand } = await db()
     .from("aufraeum_stand")
     .select("cursor, gepruefte_mails")
@@ -487,30 +568,66 @@ export async function aufraeumSchritt(
   const muellAdressen = [...new Set((urteile ?? []).filter((u) => u.urteil === "muell").map((u) => u.adresse as string))];
   const v = await absenderVerschieben(account, kategorie, muellAdressen, start + 26_000, von);
 
-  // Absender, die grundsätzlich behalten werden (Bank, Airline, Shop), schicken oft auch Werbung:
-  // deren Mails auf dieser Seite einzeln prüfen. Was Sven selbst behalten wollte, bleibt unangetastet.
+  // Danach jede übrige Mail der Seite einzeln: Werbung älter als 2 Wochen → Papierkorb, Werbung jünger → später,
+  // alles andere legt der Agent Sven beim grossen Durchgang vor (wöchentlich nur bei unsicheren Absendern).
+  // Bereits vorgelegte oder eingestufte Mails werden nicht nochmals bewertet.
   const a = aufraeumerFuer(account);
+  const urteilVon = new Map((urteile ?? []).map((u) => [u.adresse as string, u]));
   let einzeln = 0;
   let einzelnOffen = false;
-  if (r.weitere === 0 && v.rest.length === 0 && a.einzelnVerschieben) {
-    const behalten = new Set(
-      (urteile ?? []).filter((u) => u.urteil === "behalten" && u.entschieden_von !== "sven").map((u) => u.adresse as string),
-    );
-    const kandidaten = r.mails.filter((m) => m.id && behalten.has(m.adresse.toLowerCase()));
-    if (kandidaten.length && Date.now() > start + 15_000) einzelnOffen = true;
-    else if (kandidaten.length) {
+  let vorgelegt = 0;
+  if (r.weitere === 0 && v.rest.length === 0) {
+    const kandidaten = r.mails.filter((m) => {
+      const u = urteilVon.get(m.adresse.toLowerCase());
+      return m.id && u?.urteil !== "muell" && !(u?.urteil === "behalten" && u.entschieden_von === "sven");
+    });
+    const status = await vorlageStatus(account.id, kandidaten.map((m) => m.id!));
+    const istAlt = (m: StichprobenMail) => !m.datum || Date.now() - Date.parse(m.datum) > WERBUNG_ALT_TAGE * 86_400_000;
+    const nunAlt = kandidaten.filter((m) => status.get(m.id!) === "jung" && istAlt(m));
+    const neu = kandidaten.filter((m) => !status.has(m.id!));
+    let portion = neu.slice(0, 100);
+    if (neu.length > portion.length) einzelnOffen = true;
+    let werbung = new Set<number>();
+    if (portion.length && Date.now() > start + 15_000) {
+      portion = [];
+      einzelnOffen = true;
+    } else if (portion.length) {
       try {
-        const muellIdx = await einzelnBewerten(kandidaten, start + 25_000);
-        const ids = kandidaten.filter((_, i) => muellIdx.has(i)).map((m) => m.id!);
-        if (ids.length) {
-          await a.einzelnVerschieben(account, ids);
-          einzeln = ids.length;
-          await log(von, "aufgeraeumt", account.adresse, `${ids.length} Werbemails von sonst wichtigen Absendern in den Papierkorb (${kategorie})`);
-        }
+        werbung = await werbungErkennen(portion, start + 25_000);
       } catch (err) {
         if (!istZeitproblem(err)) throw err;
+        portion = [];
         einzelnOffen = true;
       }
+    }
+    const weg = [...nunAlt, ...portion.filter((m, i) => werbung.has(i) && istAlt(m))];
+    if (weg.length) {
+      await a.einzelnVerschieben(account, kategorie, weg.map((m) => m.id!));
+      einzeln = weg.length;
+      await log(von, "aufgeraeumt", account.adresse, `${weg.length} Werbemails (älter als 2 Wochen) in den Papierkorb (${kategorie})`);
+    }
+    const zeile = (m: StichprobenMail, st: string) => ({
+      account_id: account.id,
+      kategorie,
+      mail_id: m.id!,
+      adresse: m.adresse.toLowerCase(),
+      name: m.name,
+      betreff: m.betreff,
+      datum: m.datum ?? null,
+      status: st,
+    });
+    const zeilen = [
+      ...nunAlt.map((m) => zeile(m, "papierkorb")),
+      ...portion.flatMap((m, i) => {
+        if (werbung.has(i)) return [zeile(m, istAlt(m) ? "papierkorb" : "jung")];
+        const vorlegen = !istWoche(kategorie) || urteilVon.get(m.adresse.toLowerCase())?.urteil === "unsicher";
+        if (vorlegen) vorgelegt++;
+        return [zeile(m, vorlegen ? "offen" : "still")];
+      }),
+    ];
+    if (zeilen.length) {
+      const { error } = await db().from("aufraeum_vorlage").upsert(zeilen, { onConflict: "account_id,mail_id" });
+      if (error) throw new Error(`Vorlage speichern: ${error.message}`);
     }
   }
 
@@ -534,12 +651,28 @@ export async function aufraeumSchritt(
   if (standFehler) throw new Error(`Stand speichern: ${standFehler.message}`);
   return {
     verschoben: v.verschoben + einzeln,
+    vorgelegt,
     muell: r.bewertet.filter((b) => b.urteil === "muell").length,
     behalten: r.bewertet.filter((b) => b.urteil === "behalten").length,
     unsicher: r.bewertet.filter((b) => b.urteil === "unsicher").length,
     geprueft: (stand?.gepruefte_mails ?? 0) + r.geprueft,
     kategorieFertig,
   };
+}
+
+/** Was mit diesen Mails schon passiert ist (vorgelegt, als junge Werbung erkannt …). In Portionen, Graph-IDs sind lang. */
+async function vorlageStatus(accountId: string, ids: string[]): Promise<Map<string, string>> {
+  const status = new Map<string, string>();
+  for (let i = 0; i < ids.length; i += 40) {
+    const { data, error } = await db()
+      .from("aufraeum_vorlage")
+      .select("mail_id, status")
+      .eq("account_id", accountId)
+      .in("mail_id", ids.slice(i, i + 40));
+    if (error) throw new Error(`Vorlage lesen: ${error.message}`);
+    for (const d of data ?? []) status.set(d.mail_id as string, d.status as string);
+  }
+  return status;
 }
 
 /** Mails der Absender in den Papierkorb und die Anzahl je Absender nachführen. */

@@ -14,7 +14,7 @@ import { AkteLink, AktenUebersicht, InAkteAblegen } from "./Akten";
 import { MAIL_FELDER, MailKopf, type Mail } from "./Mail";
 import Postfaecher from "./Postfaecher";
 import { Navigation } from "./Seite";
-import UnsichereAbsender from "./UnsichereAbsender";
+import MailsPruefen from "./MailsPruefen";
 import { Abschnitt, Karte, Knopf, Marker } from "./ui";
 
 interface Task {
@@ -253,7 +253,7 @@ export default function Heute() {
 
           <AktenUebersicht version={stand} bereich={bereich} />
 
-          <UnsichereAbsender version={stand} />
+          <MailsPruefen version={stand} />
 
           <Abschnitt
             nummer="✉"

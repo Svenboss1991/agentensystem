@@ -9,10 +9,11 @@ interface Schritt {
   muell?: number;
   behalten?: number;
   unsicher: number;
+  vorgelegt?: number;
   weiter: number | null;
 }
 
-/** Ein Klick: der Agent räumt alle Kategorien des Postfachs auf und fragt nur bei unsicheren Absendern (auf «Heute»). */
+/** Ein Klick: der Agent räumt alle Kategorien des Postfachs auf und legt die übrigen Mails auf «Heute» vor. */
 export default function JetztAufraeumen({ accountId, fertig }: { accountId: string; fertig: () => void }) {
   const [laeuft, setLaeuft] = useState(false);
   const [meldung, setMeldung] = useState("");
@@ -25,12 +26,14 @@ export default function JetztAufraeumen({ accountId, fertig }: { accountId: stri
     let muell = 0;
     let behalten = 0;
     let geprueft = 0;
+    let vorgelegt = 0;
     let fehlversuche = 0;
     while (index !== null) {
       try {
         const r: Schritt = await funktion<Schritt>("aufraeumen", { aktion: "schritt", account_id: accountId, index });
         verschoben += r.verschoben;
         unsicher += r.unsicher;
+        vorgelegt += r.vorgelegt ?? 0;
         muell += r.muell ?? 0;
         behalten += r.behalten ?? 0;
         if (r.weiter !== index) geprueft += r.geprueft ?? 0; // Kategorie fertig: ihre Zahl übernehmen
@@ -55,8 +58,8 @@ export default function JetztAufraeumen({ accountId, fertig }: { accountId: stri
     }
     setMeldung(
       `Fertig: ${geprueft.toLocaleString("de-CH")} Mails geprüft, ${verschoben.toLocaleString("de-CH")} in den Papierkorb. ` +
-        `Neu beurteilte Absender: ${muell} Müll, ${behalten} behalten, ${unsicher} unsicher` +
-        (unsicher ? " (siehe «Aufräumen: Agent ist unsicher» oben)." : "."),
+        `Neu beurteilte Absender: ${muell} Müll, ${behalten} behalten, ${unsicher} unsicher. ` +
+        (vorgelegt ? `${vorgelegt.toLocaleString("de-CH")} Mails liegen dir unter «Aufräumen: Mails prüfen» vor.` : ""),
     );
     setLaeuft(false);
     fertig();
