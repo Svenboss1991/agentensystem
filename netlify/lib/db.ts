@@ -11,6 +11,8 @@ export interface AccountRow {
   provider: "hostpoint" | "hostinger" | "hotmail" | "gmail";
   typ: "imap" | "oauth";
   adresse: string;
+  /** Wie streng beim Aufräumen: Gmail «streng» (kaum Wichtiges), sonst «normal». */
+  aufraeum_strenge?: "streng" | "normal" | "vorsichtig";
   anzeigename: string | null;
   marke: Marke;
   aktiv: boolean;

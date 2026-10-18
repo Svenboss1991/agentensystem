@@ -93,7 +93,7 @@ export default function MailsPruefen({ version }: { version: unknown }) {
       {aufgeraeumt > 0 && (
         <p className="text-sm text-stone-500">
           In den letzten 7 Tagen hat der Agent {aufgeraeumt.toLocaleString("de-CH")} Mails selbständig in den Papierkorb
-          verschoben (Werbung älter als 2 Wochen und Müll-Absender; 30 Tage zurückholbar).
+          verschoben (Müll älter als 2 Wochen; 30 Tage zurückholbar).
         </p>
       )}
       {pruefen && (
@@ -108,7 +108,8 @@ export default function MailsPruefen({ version }: { version: unknown }) {
       {gesamt > 0 && (
         <>
           <p className="text-sm text-stone-600">
-            Diese Mails hat der Agent nicht gelöscht, weil sie keine Werbung sind. Entscheide, was bleiben soll.
+            Bei diesen Mails ist der Agent nicht sicher, ob sie Müll sind. Er lernt aus deinen Entscheiden: Löschst du von einem
+            Absender mindestens 3 Mails und behältst keine, räumt er dessen Mails künftig selbst weg.
           </p>
           <div>
             <Knopf onClick={() => setPruefen(true)} primaer>

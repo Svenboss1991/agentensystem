@@ -1,5 +1,5 @@
 import type { ImapFlow } from "imapflow";
-import { istZeitproblem, werbungErkennen, muellBewerten, nachAbsender, type AbsenderGruppe } from "./claude.js";
+import { istZeitproblem, muellBewerten, muellErkennen, type SvensEntscheid, nachAbsender, type AbsenderGruppe } from "./claude.js";
 import { db, log, type AccountRow } from "./db.js";
 import { gmail } from "./providers/gmail.js";
 import { withImap } from "./providers/imap.js";
@@ -45,7 +45,7 @@ export interface Aufraeumer {
 
 const vorTagen = (t: number) => new Date(Date.now() - t * 86_400_000);
 
-/** Werbung wird erst gelöscht, wenn sie älter als 2 Wochen ist. */
+/** Müll (Werbung, erledigte Bestellungen …) wird erst gelöscht, wenn er älter als 2 Wochen ist. */
 export const WERBUNG_ALT_TAGE = 14;
 /** Spam darf sofort weg; sonst nur Mails, die älter als 2 Wochen sind. */
 const nurAlt = (kategorie: string) => !/spam|junk/.test(kategorie);
@@ -568,7 +568,7 @@ export async function aufraeumSchritt(
   const muellAdressen = [...new Set((urteile ?? []).filter((u) => u.urteil === "muell").map((u) => u.adresse as string))];
   const v = await absenderVerschieben(account, kategorie, muellAdressen, start + 26_000, von);
 
-  // Danach jede übrige Mail der Seite einzeln: Werbung älter als 2 Wochen → Papierkorb, Werbung jünger → später,
+  // Danach jede übrige Mail der Seite einzeln: Müll älter als 2 Wochen → Papierkorb, Müll jünger → später,
   // alles andere legt der Agent Sven beim grossen Durchgang vor (wöchentlich nur bei unsicheren Absendern).
   // Bereits vorgelegte oder eingestufte Mails werden nicht nochmals bewertet.
   const a = aufraeumerFuer(account);
@@ -587,24 +587,24 @@ export async function aufraeumSchritt(
     const neu = kandidaten.filter((m) => !status.has(m.id!));
     let portion = neu.slice(0, 100);
     if (neu.length > portion.length) einzelnOffen = true;
-    let werbung = new Set<number>();
+    let muellIdx = new Set<number>();
     if (portion.length && Date.now() > start + 15_000) {
       portion = [];
       einzelnOffen = true;
     } else if (portion.length) {
       try {
-        werbung = await werbungErkennen(portion, start + 25_000);
+        muellIdx = await muellErkennen(portion, account.aufraeum_strenge ?? "normal", await svensEntscheide(account.id), start + 25_000);
       } catch (err) {
         if (!istZeitproblem(err)) throw err;
         portion = [];
         einzelnOffen = true;
       }
     }
-    const weg = [...nunAlt, ...portion.filter((m, i) => werbung.has(i) && istAlt(m))];
+    const weg = [...nunAlt, ...portion.filter((m, i) => muellIdx.has(i) && istAlt(m))];
     if (weg.length) {
       await a.einzelnVerschieben(account, kategorie, weg.map((m) => m.id!));
       einzeln = weg.length;
-      await log(von, "aufgeraeumt", account.adresse, `${weg.length} Werbemails (älter als 2 Wochen) in den Papierkorb (${kategorie})`);
+      await log(von, "aufgeraeumt", account.adresse, `${weg.length} Müll-Mails (älter als 2 Wochen) in den Papierkorb (${kategorie})`);
     }
     const zeile = (m: StichprobenMail, st: string) => ({
       account_id: account.id,
@@ -619,7 +619,7 @@ export async function aufraeumSchritt(
     const zeilen = [
       ...nunAlt.map((m) => zeile(m, "papierkorb")),
       ...portion.flatMap((m, i) => {
-        if (werbung.has(i)) return [zeile(m, istAlt(m) ? "papierkorb" : "jung")];
+        if (muellIdx.has(i)) return [zeile(m, istAlt(m) ? "papierkorb" : "jung")];
         const vorlegen = !istWoche(kategorie) || urteilVon.get(m.adresse.toLowerCase())?.urteil === "unsicher";
         if (vorlegen) vorgelegt++;
         return [zeile(m, vorlegen ? "offen" : "still")];
@@ -660,7 +660,29 @@ export async function aufraeumSchritt(
   };
 }
 
-/** Was mit diesen Mails schon passiert ist (vorgelegt, als junge Werbung erkannt …). In Portionen, Graph-IDs sind lang. */
+/**
+ * Svens letzte Entscheide über vorgelegte Mails (dieses Postfach zuerst), damit der Agent daraus lernt:
+ * je bis zu 60 gelöschte und 40 behaltene.
+ */
+async function svensEntscheide(accountId: string): Promise<SvensEntscheid[]> {
+  const holen = (status: "papierkorb" | "behalten", n: number) =>
+    db()
+      .from("aufraeum_vorlage")
+      .select("account_id, adresse, betreff, status")
+      .eq("status", status)
+      .not("entschieden_am", "is", null)
+      .order("entschieden_am", { ascending: false })
+      .limit(n * 3);
+  const [{ data: weg }, { data: bleibt }] = await Promise.all([holen("papierkorb", 60), holen("behalten", 40)]);
+  const auswahl = (zeilen: typeof weg, n: number) =>
+    [...(zeilen ?? [])]
+      .sort((a, b) => Number(b.account_id === accountId) - Number(a.account_id === accountId))
+      .slice(0, n)
+      .map((z) => ({ adresse: z.adresse as string, betreff: z.betreff as string | null, urteil: z.status as SvensEntscheid["urteil"] }));
+  return [...auswahl(weg, 60), ...auswahl(bleibt, 40)];
+}
+
+/** Was mit diesen Mails schon passiert ist (vorgelegt, als junger Müll erkannt …). In Portionen, Graph-IDs sind lang. */
 async function vorlageStatus(accountId: string, ids: string[]): Promise<Map<string, string>> {
   const status = new Map<string, string>();
   for (let i = 0; i < ids.length; i += 40) {

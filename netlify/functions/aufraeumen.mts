@@ -69,25 +69,6 @@ export default async (req: Request) => {
         for (const z of liste) nachKategorie.set(z.kategorie, [...(nachKategorie.get(z.kategorie) ?? []), z.mail_id]);
         for (const [k, ids] of nachKategorie) await aufraeumerFuer(account).einzelnVerschieben(account, k, ids);
         if (liste.length) await log("sven", "aufgeraeumt", account.adresse, `${liste.length} vorgelegte Mails in den Papierkorb`);
-        // «Alle von diesem Absender»: auch künftig als Müll behandeln.
-        if (body.merken) {
-          const absender = new Map(liste.map((z) => [`${z.kategorie}|${z.adresse}`, z]));
-          await db()
-            .from("aufraeum_absender")
-            .upsert(
-              [...absender.values()].map((z) => ({
-                account_id: account.id,
-                kategorie: z.kategorie,
-                adresse: z.adresse,
-                name: z.name,
-                urteil: "muell",
-                grund: "von Sven entschieden",
-                entschieden_von: "sven",
-                aktualisiert_am: new Date().toISOString(),
-              })),
-              { onConflict: "account_id,kategorie,adresse" },
-            );
-        }
       }
       if (liste.length) {
         await db()
@@ -95,7 +76,59 @@ export default async (req: Request) => {
           .update({ status: body.urteil === "muell" ? "papierkorb" : "behalten", entschieden_am: new Date().toISOString() })
           .in("id", liste.map((z) => z.id));
       }
-      return json(200, { erledigt: liste.length });
+      // Lernen: Absender, die Sven ganz löscht («alle löschen») oder von denen er mindestens 3 Mails gelöscht und
+      // keine behalten hat, gelten künftig als Müll; ihre übrigen vorgelegten Mails kommen gleich mit weg.
+      let gelernt = 0;
+      if (body.urteil === "muell" && liste.length) {
+        const adressen = [...new Set(liste.map((z) => z.adresse))];
+        const { data: bisher } = await db()
+          .from("aufraeum_vorlage")
+          .select("adresse, kategorie, status")
+          .eq("account_id", account.id)
+          .in("adresse", adressen)
+          .not("entschieden_am", "is", null);
+        const muellAbsender = adressen.filter((a) => {
+          const e = (bisher ?? []).filter((x) => x.adresse === a);
+          return body.merken || (e.filter((x) => x.status === "papierkorb").length >= 3 && !e.some((x) => x.status === "behalten"));
+        });
+        if (muellAbsender.length) {
+          const kategorien = new Map<string, string>();
+          for (const x of [...(bisher ?? []), ...liste]) if (muellAbsender.includes(x.adresse)) kategorien.set(`${x.kategorie}|${x.adresse}`, x.adresse);
+          await db()
+            .from("aufraeum_absender")
+            .upsert(
+              [...kategorien].map(([k, adresse]) => ({
+                account_id: account.id,
+                kategorie: k.split("|")[0],
+                adresse,
+                urteil: "muell",
+                grund: body.merken ? "von Sven entschieden" : "gelernt: Sven löscht alles von diesem Absender",
+                entschieden_von: "sven",
+                aktualisiert_am: new Date().toISOString(),
+              })),
+              { onConflict: "account_id,kategorie,adresse" },
+            );
+          const { data: rest } = await db()
+            .from("aufraeum_vorlage")
+            .select("id, kategorie, mail_id")
+            .eq("account_id", account.id)
+            .eq("status", "offen")
+            .in("adresse", muellAbsender)
+            .limit(300);
+          const nachKategorie = new Map<string, string[]>();
+          for (const z of rest ?? []) nachKategorie.set(z.kategorie, [...(nachKategorie.get(z.kategorie) ?? []), z.mail_id]);
+          for (const [k, ids] of nachKategorie) await aufraeumerFuer(account).einzelnVerschieben(account, k, ids);
+          if (rest?.length) {
+            await db()
+              .from("aufraeum_vorlage")
+              .update({ status: "papierkorb" })
+              .in("id", rest.map((z) => z.id));
+            await log("mail", "aufgeraeumt", account.adresse, `${rest.length} vorgelegte Mails von gelernten Müll-Absendern in den Papierkorb`);
+          }
+          gelernt = rest?.length ?? 0;
+        }
+      }
+      return json(200, { erledigt: liste.length, gelernt });
     }
 
     if (!aufraeumerFuer(account).kategorien[kategorie]) return json(400, { fehler: "Unbekannte Kategorie" });

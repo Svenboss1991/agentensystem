@@ -51,6 +51,7 @@ export interface Postfach {
   sync_zuletzt: string | null;
   sync_fehler: string | null;
   auto_aufraeumen: boolean;
+  aufraeum_strenge?: "streng" | "normal" | "vorsichtig";
 }
 
 interface Zahlen {
@@ -94,7 +95,7 @@ export default function Heute() {
         .eq("status", "verarbeitet")
         .order("empfangen_am", { ascending: false }),
       supabase.from("messages").select(MAIL_FELDER).eq("status", "fehler").order("empfangen_am", { ascending: false }),
-      supabase.from("accounts").select("id, adresse, provider, typ, marke, aktiv, sync_zuletzt, sync_fehler, auto_aufraeumen").order("adresse"),
+      supabase.from("accounts").select("*").order("adresse"),
       supabase
         .from("messages")
         .select("kategorie")

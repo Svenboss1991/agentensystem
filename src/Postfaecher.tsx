@@ -98,6 +98,21 @@ export default function Postfaecher({ postfaecher, neuLaden }: { postfaecher: Po
                     automatisch aufräumen
                   </label>
                 )}
+                {p.aktiv && p.auto_aufraeumen && (
+                  <select
+                    value={p.aufraeum_strenge ?? "normal"}
+                    onChange={async (e) => {
+                      await supabase.from("accounts").update({ aufraeum_strenge: e.target.value }).eq("id", p.id);
+                      neuLaden();
+                    }}
+                    className="rounded border border-stone-300 px-1 py-0.5 text-xs text-stone-600"
+                    title="Wie streng der Agent Müll erkennt"
+                  >
+                    <option value="streng">streng (kaum Wichtiges hier)</option>
+                    <option value="normal">normal</option>
+                    <option value="vorsichtig">vorsichtig (viel Wichtiges)</option>
+                  </select>
+                )}
                 {p.aktiv && aufraeumen !== p.id && (
                   <div className="flex items-start gap-3">
                     <button onClick={() => setAufraeumen(p.id)} className="mt-2 text-xs text-stone-400 underline">
