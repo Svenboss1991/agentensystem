@@ -14,6 +14,8 @@ export interface StichprobenMail {
   /** Kennung beim Anbieter, für einzelne Mails (vorlegen, verschieben, lesen). */
   id?: string;
   datum?: string;
+  /** Anfang des Textes, damit der Inhalt beurteilt werden kann. */
+  auszug?: string;
   adresse: string;
   name: string | null;
   betreff: string;
@@ -109,7 +111,7 @@ const gmailAufraeumer: Aufraeumer = {
     for (let i = 0; i < ids.length; i += 10) {
       const teil = await Promise.all(
         ids.slice(i, i + 10).map((id) =>
-          gmail<{ internalDate?: string; payload?: { headers?: { name: string; value: string }[] } }>(
+          gmail<{ internalDate?: string; snippet?: string; payload?: { headers?: { name: string; value: string }[] } }>(
             account,
             `/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`,
           ),
@@ -118,7 +120,7 @@ const gmailAufraeumer: Aufraeumer = {
       for (const m of teil) {
         const h = (name: string) => m.payload?.headers?.find((x) => x.name.toLowerCase() === name)?.value ?? "";
         const datum = m.internalDate ? new Date(Number(m.internalDate)).toISOString() : undefined;
-        mails.push({ id: ids[n++], datum, ...absenderZerlegen(h("from")), betreff: h("subject") });
+        mails.push({ id: ids[n++], datum, auszug: m.snippet, ...absenderZerlegen(h("from")), betreff: h("subject") });
       }
     }
     return { mails, naechster: liste.nextPageToken ?? null };
@@ -244,8 +246,8 @@ const hotmailAufraeumer: Aufraeumer = {
 
   async seite(account, kategorie, cursor) {
     // Der Cursor ist der «nextLink» von Microsoft (vollständige Adresse).
-    const r = (await (await graph(account, cursor ?? hListe(kategorie, "", 500, "id,subject,from,receivedDateTime"))).json()) as {
-      value: { id: string; subject?: string; receivedDateTime?: string; from?: { emailAddress?: { address?: string; name?: string } } }[];
+    const r = (await (await graph(account, cursor ?? hListe(kategorie, "", 500, "id,subject,from,receivedDateTime,bodyPreview"))).json()) as {
+      value: { id: string; subject?: string; receivedDateTime?: string; bodyPreview?: string; from?: { emailAddress?: { address?: string; name?: string } } }[];
       "@odata.nextLink"?: string;
     };
     const mails = r.value
@@ -253,6 +255,7 @@ const hotmailAufraeumer: Aufraeumer = {
       .map((m) => ({
         id: m.id,
         datum: m.receivedDateTime,
+        auszug: m.bodyPreview,
         adresse: m.from!.emailAddress!.address!,
         name: m.from!.emailAddress!.name ?? null,
         betreff: m.subject ?? "",
@@ -360,16 +363,23 @@ const imapAufraeumer: Aufraeumer = {
         const alle = ((await c.search(I_KAT[kategorie].suche(), { uid: true })) || [])
           .filter((u) => !cursor || u < Number(cursor))
           .sort((a, b) => b - a);
-        const uids = alle.slice(0, 400);
+        const uids = alle.slice(0, 150);
         const mails: StichprobenMail[] = [];
         if (uids.length) {
-          for await (const m of c.fetch(uids, { uid: true, envelope: true, internalDate: true }, { uid: true })) {
+          for await (const m of c.fetch(uids, { uid: true, envelope: true, internalDate: true, source: { maxLength: 8000 } }, { uid: true })) {
             const von = m.envelope?.from?.[0];
             const d = m.internalDate ?? m.envelope?.date;
+            let auszug: string | undefined;
+            try {
+              if (m.source) auszug = (await parseRaw(m.source, String(m.uid), null)).text.replace(/\s+/g, " ").slice(0, 400);
+            } catch {
+              // abgeschnittene Mail nicht lesbar: dann nur nach Betreff beurteilen
+            }
             if (von?.address)
               mails.push({
                 id: String(m.uid),
                 datum: d ? new Date(d).toISOString() : undefined,
+                auszug,
                 adresse: von.address,
                 name: von.name || null,
                 betreff: m.envelope?.subject ?? "",
@@ -533,8 +543,11 @@ export async function neueAbsenderBewerten(
 }
 
 /**
- * Ein Schritt durch alle Mails einer Kategorie (alle Jahre), seitenweise mit gespeicherter Stelle:
- * neue Absender der Seite bewerten, Müll-Absender der Seite in den Papierkorb (alle ihre Mails dieser Kategorie).
+ * Ein Schritt durch alle Mails einer Kategorie (alle Jahre), seitenweise mit gespeicherter Stelle.
+ * Jede Mail wird nach ihrem Inhalt beurteilt (Betreff und Textanfang), nicht nach dem Absender:
+ * Müll älter als 2 Wochen → Papierkorb, jüngerer Müll → später; alles andere wird Sven beim grossen
+ * Durchgang vorgelegt (wöchentlich nur, wenn der Agent unsicher ist).
+ * Nur Absender, die Sven selbst als Müll bzw. «behalten» markiert hat, werden als Ganzes behandelt.
  */
 export async function aufraeumSchritt(
   account: AccountRow,
@@ -550,92 +563,90 @@ export async function aufraeumSchritt(
   geprueft: number;
   kategorieFertig: boolean;
 }> {
+  const a = aufraeumerFuer(account);
   const { data: stand } = await db()
     .from("aufraeum_stand")
     .select("cursor, gepruefte_mails")
     .eq("account_id", account.id)
     .eq("kategorie", kategorie)
     .maybeSingle();
-  const r = await neueAbsenderBewerten(account, kategorie, start + 23_000, [], stand?.cursor ?? null);
+  const { mails, naechster } = await a.seite(account, kategorie, stand?.cursor ?? null);
+  const seitenAbsender = [...new Set(mails.map((m) => m.adresse.toLowerCase()))];
 
-  const { data: urteile } = r.seitenAbsender.length
-    ? await db()
-        .from("aufraeum_absender")
-        .select("adresse, urteil, entschieden_von")
-        .eq("account_id", account.id)
-        .in("adresse", r.seitenAbsender)
-    : { data: [] };
-  const muellAdressen = [...new Set((urteile ?? []).filter((u) => u.urteil === "muell").map((u) => u.adresse as string))];
-  const v = await absenderVerschieben(account, kategorie, muellAdressen, start + 26_000, von);
+  // Svens eigene Entscheide je Absender gelten weiter.
+  const svens = new Map<string, string>();
+  for (let i = 0; i < seitenAbsender.length; i += 100) {
+    const { data } = await db()
+      .from("aufraeum_absender")
+      .select("adresse, urteil")
+      .eq("account_id", account.id)
+      .eq("entschieden_von", "sven")
+      .in("adresse", seitenAbsender.slice(i, i + 100));
+    for (const d of data ?? []) svens.set(d.adresse as string, d.urteil as string);
+  }
+  const svenMuell = [...svens].filter(([, u]) => u === "muell").map(([ad]) => ad);
+  const v = await absenderVerschieben(account, kategorie, svenMuell, start + 12_000, von);
 
-  // Danach jede übrige Mail der Seite einzeln: Müll älter als 2 Wochen → Papierkorb, Müll jünger → später,
-  // alles andere legt der Agent Sven beim grossen Durchgang vor (wöchentlich nur bei unsicheren Absendern).
-  // Bereits vorgelegte oder eingestufte Mails werden nicht nochmals bewertet.
-  const a = aufraeumerFuer(account);
-  const urteilVon = new Map((urteile ?? []).map((u) => [u.adresse as string, u]));
-  let einzeln = 0;
-  let einzelnOffen = false;
-  let vorgelegt = 0;
-  if (r.weitere === 0 && v.rest.length === 0) {
-    const kandidaten = r.mails.filter((m) => {
-      const u = urteilVon.get(m.adresse.toLowerCase());
-      return m.id && u?.urteil !== "muell" && !(u?.urteil === "behalten" && u.entschieden_von === "sven");
-    });
-    const status = await vorlageStatus(account.id, kandidaten.map((m) => m.id!));
-    const istAlt = (m: StichprobenMail) => !m.datum || Date.now() - Date.parse(m.datum) > WERBUNG_ALT_TAGE * 86_400_000;
-    const nunAlt = kandidaten.filter((m) => status.get(m.id!) === "jung" && istAlt(m));
-    const neu = kandidaten.filter((m) => !status.has(m.id!));
-    let portion = neu.slice(0, 100);
-    if (neu.length > portion.length) einzelnOffen = true;
-    let muellIdx = new Set<number>();
-    if (portion.length && Date.now() > start + 15_000) {
+  const kandidaten = mails.filter((m) => m.id && !svens.has(m.adresse.toLowerCase()));
+  const status = await vorlageStatus(account.id, kandidaten.map((m) => m.id!));
+  const istAlt = (m: StichprobenMail) => !m.datum || Date.now() - Date.parse(m.datum) > WERBUNG_ALT_TAGE * 86_400_000;
+  const nunAlt = kandidaten.filter((m) => status.get(m.id!) === "jung" && istAlt(m));
+  const neu = kandidaten.filter((m) => !status.has(m.id!));
+  let portion = neu.slice(0, 100);
+  let offen = neu.length > portion.length || v.rest.length > 0;
+  let urteil: { muell: Set<number>; wichtig: Set<number> } = { muell: new Set(), wichtig: new Set() };
+  if (portion.length && Date.now() > start + 15_000) {
+    portion = [];
+    offen = true;
+  } else if (portion.length) {
+    try {
+      urteil = await muellErkennen(portion, account.aufraeum_strenge ?? "normal", await svensEntscheide(account.id), start + 25_000);
+    } catch (err) {
+      if (!istZeitproblem(err)) throw err;
       portion = [];
-      einzelnOffen = true;
-    } else if (portion.length) {
-      try {
-        muellIdx = await muellErkennen(portion, account.aufraeum_strenge ?? "normal", await svensEntscheide(account.id), start + 25_000);
-      } catch (err) {
-        if (!istZeitproblem(err)) throw err;
-        portion = [];
-        einzelnOffen = true;
-      }
-    }
-    const weg = [...nunAlt, ...portion.filter((m, i) => muellIdx.has(i) && istAlt(m))];
-    if (weg.length) {
-      await a.einzelnVerschieben(account, kategorie, weg.map((m) => m.id!));
-      einzeln = weg.length;
-      await log(von, "aufgeraeumt", account.adresse, `${weg.length} Müll-Mails (älter als 2 Wochen) in den Papierkorb (${kategorie})`);
-    }
-    const zeile = (m: StichprobenMail, st: string) => ({
-      account_id: account.id,
-      kategorie,
-      mail_id: m.id!,
-      adresse: m.adresse.toLowerCase(),
-      name: m.name,
-      betreff: m.betreff,
-      datum: m.datum ?? null,
-      status: st,
-    });
-    const zeilen = [
-      ...nunAlt.map((m) => zeile(m, "papierkorb")),
-      ...portion.flatMap((m, i) => {
-        if (muellIdx.has(i)) return [zeile(m, istAlt(m) ? "papierkorb" : "jung")];
-        const vorlegen = !istWoche(kategorie) || urteilVon.get(m.adresse.toLowerCase())?.urteil === "unsicher";
-        if (vorlegen) vorgelegt++;
-        return [zeile(m, vorlegen ? "offen" : "still")];
-      }),
-    ];
-    if (zeilen.length) {
-      const { error } = await db().from("aufraeum_vorlage").upsert(zeilen, { onConflict: "account_id,mail_id" });
-      if (error) throw new Error(`Vorlage speichern: ${error.message}`);
+      offen = true;
     }
   }
 
-  // Erst weiterblättern, wenn diese Seite ganz bewertet und aufgeräumt ist. Wurde etwas weggeräumt, rücken
-  // spätere Mails nach vorne: dann dieselbe Seite nochmals lesen, sonst würden Mails übersprungen.
-  const seiteFertig = r.weitere === 0 && v.rest.length === 0 && !einzelnOffen;
-  const weiter = seiteFertig && v.verschoben + einzeln === 0;
-  const kategorieFertig = weiter && r.naechster === null;
+  const weg = [...nunAlt, ...portion.filter((m, i) => urteil.muell.has(i) && istAlt(m))];
+  if (weg.length) {
+    await a.einzelnVerschieben(account, kategorie, weg.map((m) => m.id!));
+    await log(von, "aufgeraeumt", account.adresse, `${weg.length} Müll-Mails (älter als 2 Wochen) in den Papierkorb (${kategorie})`);
+  }
+  const zeile = (m: StichprobenMail, st: string) => ({
+    account_id: account.id,
+    kategorie,
+    mail_id: m.id!,
+    adresse: m.adresse.toLowerCase(),
+    name: m.name,
+    betreff: m.betreff,
+    auszug: m.auszug ?? null,
+    datum: m.datum ?? null,
+    status: st,
+  });
+  let vorgelegt = 0;
+  let wichtig = 0;
+  const zeilen = [
+    ...nunAlt.map((m) => zeile(m, "papierkorb")),
+    ...portion.map((m, i) => {
+      if (urteil.muell.has(i)) return zeile(m, istAlt(m) ? "papierkorb" : "jung");
+      if (urteil.wichtig.has(i)) wichtig++;
+      // Grosser Durchgang: alles vorlegen, was nicht gelöscht wird. Wöchentlich: nur, wo der Agent unsicher ist.
+      const vorlegen = !istWoche(kategorie) || !urteil.wichtig.has(i);
+      if (vorlegen) vorgelegt++;
+      return zeile(m, vorlegen ? "offen" : "still");
+    }),
+  ];
+  if (zeilen.length) {
+    const { error } = await db().from("aufraeum_vorlage").upsert(zeilen, { onConflict: "account_id,mail_id" });
+    if (error) throw new Error(`Vorlage speichern: ${error.message}`);
+  }
+
+  // Erst weiterblättern, wenn diese Seite ganz erledigt ist. Wurde etwas weggeräumt, rücken spätere Mails
+  // nach vorne: dann dieselbe Seite nochmals lesen, sonst würden Mails übersprungen.
+  const verschoben = v.verschoben + weg.length;
+  const weiter = !offen && verschoben === 0;
+  const kategorieFertig = weiter && naechster === null;
   const jetzt = new Date().toISOString();
   const { error: standFehler } = await db()
     .from("aufraeum_stand")
@@ -644,18 +655,18 @@ export async function aufraeumSchritt(
       kategorie,
       zuletzt: jetzt,
       fehler: null,
-      cursor: weiter ? r.naechster : (stand?.cursor ?? null),
-      gepruefte_mails: kategorieFertig ? 0 : (stand?.gepruefte_mails ?? 0) + (weiter ? r.geprueft : 0),
+      cursor: weiter ? naechster : (stand?.cursor ?? null),
+      gepruefte_mails: kategorieFertig ? 0 : (stand?.gepruefte_mails ?? 0) + (weiter ? mails.length : 0),
       ...(kategorieFertig ? { durchgang_fertig_am: jetzt } : {}),
     });
   if (standFehler) throw new Error(`Stand speichern: ${standFehler.message}`);
   return {
-    verschoben: v.verschoben + einzeln,
+    verschoben,
     vorgelegt,
-    muell: r.bewertet.filter((b) => b.urteil === "muell").length,
-    behalten: r.bewertet.filter((b) => b.urteil === "behalten").length,
-    unsicher: r.bewertet.filter((b) => b.urteil === "unsicher").length,
-    geprueft: (stand?.gepruefte_mails ?? 0) + r.geprueft,
+    muell: portion.filter((_, i) => urteil.muell.has(i)).length,
+    behalten: wichtig,
+    unsicher: vorgelegt,
+    geprueft: (stand?.gepruefte_mails ?? 0) + mails.length,
     kategorieFertig,
   };
 }
@@ -668,7 +679,7 @@ async function svensEntscheide(accountId: string): Promise<SvensEntscheid[]> {
   const holen = (status: "papierkorb" | "behalten", n: number) =>
     db()
       .from("aufraeum_vorlage")
-      .select("account_id, adresse, betreff, status")
+      .select("account_id, adresse, betreff, auszug, status")
       .eq("status", status)
       .not("entschieden_am", "is", null)
       .order("entschieden_am", { ascending: false })
@@ -678,7 +689,12 @@ async function svensEntscheide(accountId: string): Promise<SvensEntscheid[]> {
     [...(zeilen ?? [])]
       .sort((a, b) => Number(b.account_id === accountId) - Number(a.account_id === accountId))
       .slice(0, n)
-      .map((z) => ({ adresse: z.adresse as string, betreff: z.betreff as string | null, urteil: z.status as SvensEntscheid["urteil"] }));
+      .map((z) => ({
+        adresse: z.adresse as string,
+        betreff: z.betreff as string | null,
+        auszug: z.auszug as string | null,
+        urteil: z.status as SvensEntscheid["urteil"],
+      }));
   return [...auswahl(weg, 60), ...auswahl(bleibt, 40)];
 }
 

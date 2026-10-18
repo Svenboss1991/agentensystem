@@ -21,12 +21,12 @@ interface GanzeMail {
 type Urteil = "muell" | "behalten";
 
 /** Vorgelegte Mails an den Server melden, je Postfach in Portionen zu 300. */
-async function melden(mails: Vorlage[], urteil: Urteil, merken = false): Promise<void> {
+async function melden(mails: Vorlage[], urteil: Urteil): Promise<void> {
   const nachPostfach = new Map<string, string[]>();
   for (const m of mails) nachPostfach.set(m.account_id, [...(nachPostfach.get(m.account_id) ?? []), m.id]);
   for (const [account_id, ids] of nachPostfach) {
     for (let i = 0; i < ids.length; i += 300) {
-      await funktion("aufraeumen", { aktion: "vorlage_entscheiden", account_id, ids: ids.slice(i, i + 300), urteil, merken });
+      await funktion("aufraeumen", { aktion: "vorlage_entscheiden", account_id, ids: ids.slice(i, i + 300), urteil });
     }
   }
 }
@@ -77,7 +77,7 @@ export default function MailsPruefen({ version }: { version: unknown }) {
   async function gruppeEntscheiden(mails: Vorlage[], urteil: Urteil) {
     setLaeuft(mails[0].id);
     try {
-      await melden(mails, urteil, urteil === "muell");
+      await melden(mails, urteil);
       const weg = new Set(mails.map((m) => m.id));
       setListe((l) => l.filter((m) => !weg.has(m.id)));
       setGesamt((n) => n - mails.length);
@@ -108,8 +108,8 @@ export default function MailsPruefen({ version }: { version: unknown }) {
       {gesamt > 0 && (
         <>
           <p className="text-sm text-stone-600">
-            Bei diesen Mails ist der Agent nicht sicher, ob sie Müll sind. Er lernt aus deinen Entscheiden: Löschst du von einem
-            Absender mindestens 3 Mails und behältst keine, räumt er dessen Mails künftig selbst weg.
+            Bei diesen Mails ist der Agent nicht sicher, ob sie Müll sind. Er beurteilt jede Mail nach ihrem Inhalt und lernt aus
+            deinen Entscheiden: Ähnliche Mails behandelt er künftig gleich, egal von welchem Absender.
           </p>
           <div>
             <Knopf onClick={() => setPruefen(true)} primaer>
@@ -151,9 +151,6 @@ export default function MailsPruefen({ version }: { version: unknown }) {
                 erscheint, sobald diese erledigt sind.
               </p>
             )}
-            <p className="mt-2 text-xs text-stone-400">
-              «Alle löschen» merkt sich den Absender als Müll: Künftige Mails von ihm räumt der Agent selbst weg.
-            </p>
           </Karte>
         </>
       )}
@@ -197,7 +194,7 @@ function Durchgehen({ reihe, schliessen }: { reihe: Vorlage[]; schliessen: () =>
       }
       const mails = reihe.slice(pos, bis);
       setOffen((n) => n + 1);
-      melden(mails, urteil, ganzerAbsender && urteil === "muell")
+      melden(mails, urteil)
         .catch((e) => setFehler(`${aktuell.name || aktuell.adresse}: ${e instanceof Error ? e.message : String(e)}`))
         .finally(() => setOffen((n) => n - 1));
       setPos(bis);
