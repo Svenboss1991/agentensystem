@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { AnalystenBalken, analystenVon, LimitFormular } from "./Finanzen";
-import { depotLaden, geld, prozent, type PositionAuswertung, type Tx, type Wertpapier } from "./lib/finanzDaten";
+import { beobachten, depotLaden, geld, prozent, type PositionAuswertung, type Tx, type Wertpapier } from "./lib/finanzDaten";
 import { bereich, boosterAuszahlung, boosterSchwellen, erwarteteAuszahlung, wahrscheinlichkeitUnter, type Produkt } from "./lib/produkt";
 import { supabase, zeit } from "./lib/supabase";
 import { Seite } from "./Seite";
@@ -79,9 +79,18 @@ export function WertpapierSeite({ id }: { id: string }) {
 
   return (
     <Seite titel={papier.emisora}>
-      <p className="-mt-4 mb-6 text-stone-500">
-        {[b.name ?? papier.name, b.sektor, papier.typ].filter(Boolean).join(" · ")}
-      </p>
+      <div className="-mt-4 mb-6 flex flex-wrap items-baseline justify-between gap-2">
+        <p className="text-stone-500">{[b.name ?? papier.name, b.sektor, papier.typ].filter(Boolean).join(" · ")}</p>
+        <button
+          onClick={async () => {
+            await beobachten(papier.emisora, papier.typ, papier.ticker, !papier.beobachten);
+            await laden();
+          }}
+          className={`rounded-full border px-3 py-1 text-xs ${papier.beobachten ? "border-amber-300 bg-amber-50 text-amber-800" : "border-stone-300 text-stone-600"}`}
+        >
+          {papier.beobachten ? "★ auf der Watchlist" : "☆ auf die Watchlist"}
+        </button>
+      </div>
 
       {/* Meine Position */}
       <Karte>

@@ -19,6 +19,9 @@ export interface Wertpapier {
   bericht_fehler: string | null;
   notiz: string | null;
   produkt: import("./produkt").Produkt | null;
+  beobachten?: boolean;
+  beobachtet_seit?: string | null;
+  kurs_beim_hinzufuegen?: number | null;
 }
 
 export interface Tx {
@@ -63,8 +66,19 @@ export interface PositionAuswertung {
 
 export const heute = () => new Intl.DateTimeFormat("en-CA", { timeZone: ZEITZONE }).format(new Date());
 
-const tickerVorschlag = (emisora: string, typ: PapierTyp) =>
-  typ === "aktie" || typ === "etf" ? `${emisora.replace(/\s+/g, "")}.MX` : null;
+export const tickerVorschlag = (emisora: string, typ: PapierTyp) =>
+  typ === "aktie" || typ === "etf" ? `${emisora.replace(/[\s*]+/g, "")}.MX` : null;
+
+/** Titel auf die Watchlist setzen (oder wieder herunternehmen). Neue Titel werden angelegt. */
+export async function beobachten(emisora: string, typ: PapierTyp, ticker: string | null, an = true): Promise<void> {
+  const kuerzel = emisora.trim().toUpperCase().replace(/\s+/g, " ");
+  const { data: da } = await supabase.from("wertpapiere").select("id").eq("emisora", kuerzel).maybeSingle();
+  const felder = an ? { beobachten: true, beobachtet_seit: heute(), kurs_beim_hinzufuegen: null } : { beobachten: false };
+  const { error } = da
+    ? await supabase.from("wertpapiere").update(felder).eq("id", da.id)
+    : await supabase.from("wertpapiere").insert({ emisora: kuerzel, typ, ticker: ticker || tickerVorschlag(kuerzel, typ), ...felder });
+  if (error) throw new Error(error.message);
+}
 
 // ─── Import ──────────────────────────────────────────────────────────────────
 

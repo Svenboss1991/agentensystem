@@ -40,6 +40,8 @@ export interface Wertpapier {
   bericht: Bericht | null;
   bericht_am: string | null;
   warnung_am: string | null;
+  beobachten?: boolean;
+  kurs_beim_hinzufuegen?: number | null;
   produkt: unknown;
 }
 
@@ -110,7 +112,13 @@ export async function kurseUndLimits(): Promise<number> {
     n++;
     await db()
       .from("wertpapiere")
-      .update({ kurs: k.kurs, kurs_vortag: k.vortag, kurs_am: new Date().toISOString() })
+      .update({
+        kurs: k.kurs,
+        kurs_vortag: k.vortag,
+        kurs_am: new Date().toISOString(),
+        // Watchlist: Kurs bei Aufnahme festhalten, um die Entwicklung seither zu zeigen.
+        ...(w.beobachten && w.kurs_beim_hinzufuegen == null ? { kurs_beim_hinzufuegen: k.kurs } : {}),
+      })
       .eq("id", w.id);
 
     // Eigene Limits
@@ -251,7 +259,7 @@ function berichtLesen(m: Anthropic.Messages.Message): Bericht {
   return Bericht.parse(JSON.parse(json));
 }
 
-/** Wertpapiere, für die ein Bericht fällig ist: im Bestand oder mit Limit, Bericht älter als 20 Stunden oder angefordert. */
+/** Wertpapiere, für die ein Bericht fällig ist: im Bestand, auf der Watchlist oder mit Limit, Bericht älter als 20 Stunden oder angefordert. */
 async function faelligeBerichte(): Promise<Wertpapier[]> {
   const { data } = await db().from("wertpapiere").select("*").neq("typ", "geldmarkt");
   const { data: bestand } = await db().from("depot_positionen").select("wertpapier_id, stueck, stand_am").order("stand_am", { ascending: false });
@@ -261,6 +269,7 @@ async function faelligeBerichte(): Promise<Wertpapier[]> {
   const relevant = new Set([
     ...[...neuesterStand].filter(([, s]) => s > 0).map(([id]) => id),
     ...(limits ?? []).map((l) => l.wertpapier_id as string),
+    ...((data ?? []) as Wertpapier[]).filter((w) => w.beobachten).map((w) => w.id),
   ]);
   const grenze = Date.now() - 20 * 3600_000;
   return ((data ?? []) as Wertpapier[]).filter((w) => relevant.has(w.id) && (!w.bericht_am || Date.parse(w.bericht_am) < grenze));

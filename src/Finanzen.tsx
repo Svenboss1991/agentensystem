@@ -1,6 +1,7 @@
 import readXlsxFile from "read-excel-file/browser";
 import { useCallback, useEffect, useState } from "react";
 import Konten from "./Konten";
+import Watchlist from "./Watchlist";
 import { depotLaden, geld, heute, hsbcImportieren, kontenLaden, prozent, saldoSetzen, type Depot, type Konto, type PositionAuswertung } from "./lib/finanzDaten";
 import type { Blatt } from "./lib/hsbcImport";
 import { zielRechnung } from "./lib/rendite";
@@ -287,6 +288,10 @@ export function FinanzenSeite() {
           Kein Rat zum Kaufen oder Verkaufen.
         </p>
       </Karte>
+
+      {/* Watchlist */}
+      <h2 className="mb-3 mt-10 text-xl font-semibold">Watchlist</h2>
+      <Watchlist />
 
       {/* Briefing */}
       <h2 className="mb-3 mt-10 text-xl font-semibold">Briefing</h2>
