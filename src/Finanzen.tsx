@@ -172,8 +172,24 @@ export function FinanzenSeite() {
             <dl className="mt-4 grid grid-cols-1 gap-3 border-t border-stone-700 pt-4 text-sm sm:grid-cols-3">
               <HeroWert titel="Nötige Rendite ohne Sparen" wert={`${prozent(z.noetigeRendite)} pro Jahr`} />
               <HeroWert titel="Prognose mit heutiger Rendite" wert={depot.xirr != null ? geld(z.prognose) : "– (zu kurze Historie)"} />
-              <HeroWert titel="Nötige Sparrate pro Monat" wert={depot.xirr != null ? geld(z.sparrate) : "–"} />
+              <HeroWert titel="Nötige Sparrate mit heutiger Rendite" wert={depot.xirr != null ? `${geld(z.sparrate)} / Monat` : "–"} />
             </dl>
+            {/* Sparrate bei angenommenen Renditen */}
+            <div className="mt-4 border-t border-stone-700 pt-4">
+              <p className="mb-2 text-xs text-stone-400">Nötige Sparrate pro Monat, wenn das Vermögen so viel Rendite bringt:</p>
+              <div className="grid grid-cols-3 gap-2">
+                {[0.05, 0.1, 0.15].map((r) => {
+                  const x = zielRechnung(netto, ziel.betrag, jahre, r);
+                  return (
+                    <div key={r} className="rounded-lg bg-stone-800 px-3 py-2">
+                      <p className="text-xs text-stone-400">{(r * 100).toFixed(0)} % pro Jahr</p>
+                      <p className="font-semibold tabular-nums">{x.sparrate > 0 ? geld(x.sparrate) : "nicht nötig"}</p>
+                      <p className="text-[11px] text-stone-500">ohne Sparen: {geld(x.prognose)}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </>
         )}
       </section>
