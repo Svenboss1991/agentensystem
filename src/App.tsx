@@ -85,7 +85,7 @@ function Login() {
   return (
     <Rahmen>
       <div className="mb-6 flex flex-col items-center gap-2 text-center">
-        <img src="/lupita.svg" alt="" className="h-24 w-24" />
+        <img src="/lupita.png" alt="" className="h-32 w-32" />
         <h1 className="text-2xl font-semibold">Hola, ich bin Lupita</h1>
         <p className="text-sm text-stone-500">Deine Assistentin für Mails, Akten und Finanzen.</p>
       </div>

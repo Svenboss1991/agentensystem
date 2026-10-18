@@ -16,7 +16,7 @@ export function Navigation() {
   return (
     <nav className="mb-6 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
       <a href="#/" className="mr-2 flex items-center gap-1.5 font-semibold text-stone-900">
-        <img src="/lupita.svg" alt="" className="h-8 w-8" />
+        <img src="/lupita.png" alt="" className="h-10 w-10" />
         Lupita
       </a>
       {LINKS.map((l) => (
