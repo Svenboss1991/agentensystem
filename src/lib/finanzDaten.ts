@@ -203,6 +203,8 @@ export async function depotLaden(): Promise<Depot> {
   const neuesteBank = new Map<string, BankPosition>();
   for (const x of (b.data ?? []) as BankPosition[]) if (!neuesteBank.has(x.wertpapier_id)) neuesteBank.set(x.wertpapier_id, x);
 
+  // Neuester Positionen-Import: Was dort nicht (mehr) vorkommt, ist nicht mehr im Depot.
+  const letzterStand = [...neuesteBank.values()].reduce((m, x) => (x.stand_am > m ? x.stand_am : m), "");
   const stichtag = heute();
   const ersterImport = tx[0]?.datum ?? stichtag;
   const positionen: PositionAuswertung[] = [];
@@ -217,22 +219,34 @@ export async function depotLaden(): Promise<Depot> {
       stueck: Number(x.stueck ?? 0),
       betrag: Number(x.betrag ?? 0),
     }));
-    const bekannt = bewegungen.reduce((s, x) => s + (x.typ === "kauf" ? x.stueck : x.typ === "verkauf" ? -x.stueck : 0), 0);
-    const stueck = bank ? Number(bank.stueck) : bekannt;
+    const netto = (liste: Bewegung[]) => liste.reduce((s, x) => s + (x.typ === "kauf" ? x.stueck : x.typ === "verkauf" ? -x.stueck : 0), 0);
+    const bekannt = netto(bewegungen);
+    // Bestand: letzter Bank-Stand plus Käufe/Verkäufe danach. Ohne aktuellen Bank-Stand aus den Bewegungen,
+    // aber nie negativ (ein Verkauf ohne bekannten Kauf heisst: vor dem ersten Import gekauft, jetzt verkauft).
+    const stueck =
+      bank && bank.stand_am === letzterStand
+        ? Number(bank.stueck) + netto(bewegungen.filter((x) => x.datum > bank.stand_am))
+        : Math.max(0, bekannt);
 
     // Bestand vor dem ersten Import: mit Durchschnittspreis der Bank zum ersten bekannten Datum ansetzen.
     let geschaetzt: PositionAuswertung["geschaetzt"] = null;
     const fehlt = Math.round((stueck - bekannt) * 1e6) / 1e6;
-    if (fehlt > 0 && bank?.kosten_durchschnitt) {
+    // Einstandspreis: Durchschnitt der Bank; fehlt der (Titel schon verkauft), der Verkaufspreis, also Gewinn 0.
+    const verkaeufe = bewegungen.filter((x) => x.typ === "verkauf");
+    const verkaufspreis = verkaeufe.length
+      ? verkaeufe.reduce((s, x) => s + x.betrag, 0) / verkaeufe.reduce((s, x) => s + x.stueck, 0)
+      : null;
+    const einstand = bank?.kosten_durchschnitt ? Number(bank.kosten_durchschnitt) : verkaufspreis;
+    if (fehlt > 0 && einstand) {
       const ersterEigener = bewegungen[0]?.datum ?? ersterImport;
       const datum = ersterEigener < ersterImport ? ersterEigener : ersterImport;
-      geschaetzt = { stueck: fehlt, betrag: fehlt * Number(bank.kosten_durchschnitt), datum };
+      geschaetzt = { stueck: fehlt, betrag: fehlt * einstand, datum };
       bewegungen.unshift({ datum, typ: "kauf", stueck: fehlt, betrag: geschaetzt.betrag });
     }
 
     const liveAktuell = papier.kurs != null && papier.kurs_am && (!bank || papier.kurs_am.slice(0, 10) >= bank.stand_am);
     const kurs = liveAktuell ? Number(papier.kurs) : bank?.kurs != null ? Number(bank.kurs) : null;
-    const wert = kurs != null ? kurs * stueck : Number(bank?.wert ?? 0);
+    const wert = !stueck ? 0 : kurs != null ? kurs * stueck : Number(bank?.wert ?? 0);
     if (!bewegungen.length && !stueck) continue;
 
     const rendite = positionsRendite(bewegungen, wert, stichtag);

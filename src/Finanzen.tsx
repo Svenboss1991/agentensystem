@@ -135,7 +135,8 @@ export function FinanzenSeite() {
   const z = ziel ? zielRechnung(netto, ziel.betrag, jahre, depot.xirr) : null;
   const fortschritt = ziel ? Math.max(0, Math.min(1, netto / ziel.betrag)) : 0;
 
-  const positionen = [...depot.positionen].sort((a, b) => b.rendite.wert - a.rendite.wert);
+  // Ganz verkaufte Titel nicht in der Tabelle (ihr Gewinn zählt oben im Total weiter).
+  const positionen = depot.positionen.filter((p) => p.stueck > 0).sort((a, b) => b.rendite.wert - a.rendite.wert);
   const anteil = (w: number) => (depotGesamt ? w / depotGesamt : 0);
   const farbeVon = new Map(positionen.map((p, i) => [p.papier.id, FARBEN[i % FARBEN.length]]));
 
@@ -421,7 +422,12 @@ function PositionsZeile({ p, farbe: punkt, anteil }: { p: PositionAuswertung; fa
       </td>
       <td className="px-2 py-3 text-right tabular-nums">
         {p.kurs?.toLocaleString("de-CH", { maximumFractionDigits: 2 }) ?? "–"}
-        {p.veraenderungHeute != null && <span className={`block text-xs ${farbe(p.veraenderungHeute)}`}>{prozent(p.veraenderungHeute)} heute</span>}
+        {p.veraenderungHeute != null ? (
+          <span className={`block text-xs ${farbe(p.veraenderungHeute)}`}>{prozent(p.veraenderungHeute)} heute</span>
+        ) : (
+          p.kursQuelle === "bank" &&
+          p.bank && <span className="block text-xs text-amber-700" title="Kein Live-Kurs: Kurs aus dem letzten HSBC-Import">Bank, {datum(p.bank.stand_am)}</span>
+        )}
       </td>
       <td className="px-2 py-3 text-right font-medium tabular-nums">{geld(p.rendite.wert)}</td>
       <td className={`px-2 py-3 text-right tabular-nums ${farbe(p.rendite.gewinn)}`}>
