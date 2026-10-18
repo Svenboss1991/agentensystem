@@ -142,7 +142,7 @@ export async function hsbcImportieren(blaetter: Blatt[]): Promise<string> {
     if (weg.length) {
       await supabase
         .from("depot_positionen")
-        .upsert(weg.map((id) => ({ depot: "HSBC", wertpapier_id: id, stand_am: heute(), stueck: 0, wert: 0 })), {
+        .upsert(weg.map((id) => ({ depot: "HSBC", wertpapier_id: id, stand_am: zeilen[0]?.stand_am ?? heute(), stueck: 0, wert: 0 })), {
           onConflict: "depot,wertpapier_id,stand_am",
         });
     }
@@ -203,8 +203,6 @@ export async function depotLaden(): Promise<Depot> {
   const neuesteBank = new Map<string, BankPosition>();
   for (const x of (b.data ?? []) as BankPosition[]) if (!neuesteBank.has(x.wertpapier_id)) neuesteBank.set(x.wertpapier_id, x);
 
-  // Neuester Positionen-Import: Was dort nicht (mehr) vorkommt, ist nicht mehr im Depot.
-  const letzterStand = [...neuesteBank.values()].reduce((m, x) => (x.stand_am > m ? x.stand_am : m), "");
   const stichtag = heute();
   const ersterImport = tx[0]?.datum ?? stichtag;
   const positionen: PositionAuswertung[] = [];
@@ -221,12 +219,11 @@ export async function depotLaden(): Promise<Depot> {
     }));
     const netto = (liste: Bewegung[]) => liste.reduce((s, x) => s + (x.typ === "kauf" ? x.stueck : x.typ === "verkauf" ? -x.stueck : 0), 0);
     const bekannt = netto(bewegungen);
-    // Bestand: letzter Bank-Stand plus Käufe/Verkäufe danach. Ohne aktuellen Bank-Stand aus den Bewegungen,
-    // aber nie negativ (ein Verkauf ohne bekannten Kauf heisst: vor dem ersten Import gekauft, jetzt verkauft).
-    const stueck =
-      bank && bank.stand_am === letzterStand
-        ? Number(bank.stueck) + netto(bewegungen.filter((x) => x.datum > bank.stand_am))
-        : Math.max(0, bekannt);
+    // Bestand: letzter Bank-Stand des Titels (verkaufte haben dort 0) plus Käufe/Verkäufe danach. Ohne Bank-Stand
+    // aus den Bewegungen, aber nie negativ (ein Verkauf ohne bekannten Kauf heisst: vor dem ersten Import gekauft).
+    const stueck = bank
+      ? Math.max(0, Number(bank.stueck) + netto(bewegungen.filter((x) => x.datum > bank.stand_am)))
+      : Math.max(0, bekannt);
 
     // Bestand vor dem ersten Import: mit Durchschnittspreis der Bank zum ersten bekannten Datum ansetzen.
     let geschaetzt: PositionAuswertung["geschaetzt"] = null;
