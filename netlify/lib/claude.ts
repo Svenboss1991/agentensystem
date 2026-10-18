@@ -5,7 +5,13 @@ import type { AccountRow, Marke } from "./db.js";
 import { envOptional } from "./env.js";
 import type { IncomingMail } from "./providers/types.js";
 
-const MODEL = envOptional("CLAUDE_MODEL") ?? "claude-opus-5-5";
+// Zwei Stufen, damit es günstig bleibt:
+// - «klein» (Claude Haiku 5.5): Massenarbeit wie Aufräumen und Abos lesen, rund 40× günstiger als Opus.
+// - «mittel» (Claude Sonnet 5.5): Mails einordnen, Entwürfe, Briefing.
+// Beide lassen sich in Netlify mit CLAUDE_MODEL_KLEIN bzw. CLAUDE_MODEL überschreiben.
+export const MODELL_KLEIN = envOptional("CLAUDE_MODEL_KLEIN") ?? "claude-haiku-5-5";
+export const MODELL_MITTEL = envOptional("CLAUDE_MODEL") ?? "claude-sonnet-5-5";
+type Stufe = "klein" | "mittel";
 
 let client: Anthropic | undefined;
 
@@ -45,19 +51,26 @@ async function ask<T extends z.ZodType>(
   user: string | Anthropic.Beta.Messages.BetaContentBlockParam[],
   effort: "low" | "medium",
   frist: number,
+  stufe: Stufe = "mittel",
 ): Promise<z.infer<T>> {
   const rest = frist - Date.now();
   if (rest < 3_000) throw new ZeitAbgelaufen();
-  const res = await anthropic().beta.messages.parse({
-    model: MODEL,
-    max_tokens: 16000,
-    betas: ["server-side-fallback-2026-07-01"],
-    fallbacks: "default",
-    output_config: { effort, format: betaZodOutputFormat(schema) },
-    system: sauber(system),
-    messages: [{ role: "user", content: inhaltSauber(user) }],
-  }, { timeout: rest, maxRetries: 0 });
-  if (res.stop_reason === "refusal") throw new Error("Claude hat die Anfrage abgelehnt");
+  const res = await anthropic().beta.messages.parse(
+    {
+      model: stufe === "klein" ? MODELL_KLEIN : MODELL_MITTEL,
+      max_tokens: 16000,
+      // Serverseitiger Ersatz bei Ablehnung gibt es nur für Sonnet; bei Haiku übernimmt das unten die mittlere Stufe.
+      ...(stufe === "mittel" ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" } : {}),
+      output_config: { effort, format: betaZodOutputFormat(schema) },
+      system: sauber(system),
+      messages: [{ role: "user", content: inhaltSauber(user) }],
+    } as Parameters<ReturnType<typeof anthropic>["beta"]["messages"]["parse"]>[0],
+    { timeout: rest, maxRetries: 0 },
+  );
+  if (res.stop_reason === "refusal") {
+    if (stufe === "klein") return ask(schema, system, user, effort, frist, "mittel");
+    throw new Error("Claude hat die Anfrage abgelehnt");
+  }
   if (res.stop_reason === "max_tokens") throw new Error("Claude-Antwort abgeschnitten (max_tokens)");
   if (res.parsed_output == null) throw new Error("Claude lieferte keine gültige Struktur");
   return res.parsed_output as z.infer<T>;
@@ -348,7 +361,7 @@ export async function muellBewerten(
   const liste = gruppen
     .map((g) => `- ${g.adresse}${g.name ? ` (${g.name})` : ""}, ${g.anzahl} Mails: ${g.beispiele.map((b) => `«${b}»`).join(", ")}`)
     .join("\n");
-  const r = await ask(MuellBewertung, MUELL_SYSTEM, `Kategorie: ${kategorie}\n\n<absender>\n${liste}\n</absender>`, "low", frist);
+  const r = await ask(MuellBewertung, MUELL_SYSTEM, `Kategorie: ${kategorie}\n\n<absender>\n${liste}\n</absender>`, "low", frist, "klein");
   return new Map(r.bewertungen.map((b) => [b.adresse.toLowerCase(), { urteil: b.urteil, grund: b.grund }]));
 }
 
@@ -410,6 +423,7 @@ export async function muellErkennen(
     `${STRENGE[strenge] ?? STRENGE.normal}\nHeute ist ${new Date().toISOString().slice(0, 10)}.\n\n${beispiele}<mails>\n${liste}\n</mails>`,
     "low",
     frist,
+    "klein",
   );
   const gueltig = (l: number[]) => new Set(l.filter((i) => i >= 0 && i < mails.length));
   const muell = gueltig(r.muell);
@@ -497,6 +511,7 @@ export function aboLesen(mail: IncomingMail, account: AccountRow, heute: string,
     `Heute ist ${heute}.\n\n${mailBlock(mail, account)}`,
     "low",
     frist,
+    "klein",
   );
 }
 

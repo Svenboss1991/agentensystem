@@ -6,7 +6,8 @@ import { envOptional } from "./env.js";
 // Analyse von Policen und Verträgen über die Batch-Schnittstelle: kein 30-Sekunden-Limit, halbe Kosten.
 // Ablauf: Sven lädt hoch → analyse_status «laeuft» → der geplante Lauf reicht einen Batch ein → holt das Ergebnis ab.
 
-const MODEL = envOptional("CLAUDE_MODEL") ?? "claude-opus-5-5";
+// Sonnet 5.5 reicht für Recherche und Auswertung und kostet die Hälfte von Opus (über die Batch-Schnittstelle nochmals die Hälfte).
+const MODEL = envOptional("CLAUDE_MODEL") ?? "claude-sonnet-5-5";
 let client: Anthropic | undefined;
 const anthropic = () => (client ??= new Anthropic());
 

@@ -8,7 +8,8 @@ import { envOptional } from "./env.js";
 // über die Batch-Schnittstelle ohne Zeitlimit) und das tägliche Briefing. Er führt nie Aufträge aus.
 
 const ZEITZONE = "America/Bahia_Banderas";
-const MODEL = envOptional("CLAUDE_MODEL") ?? "claude-opus-5-5";
+// Sonnet 5.5 reicht für Recherche und Auswertung und kostet die Hälfte von Opus (über die Batch-Schnittstelle nochmals die Hälfte).
+const MODEL = envOptional("CLAUDE_MODEL") ?? "claude-sonnet-5-5";
 const WARNSCHWELLE = 0.08; // ±8 % an einem Tag
 
 interface ProduktDaten {
