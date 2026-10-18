@@ -84,7 +84,11 @@ function Login() {
 
   return (
     <Rahmen>
-      <h1 className="mb-6 text-2xl font-semibold">Heute</h1>
+      <div className="mb-6 flex flex-col items-center gap-2 text-center">
+        <img src="/lupita.svg" alt="" className="h-24 w-24" />
+        <h1 className="text-2xl font-semibold">Hola, ich bin Lupita</h1>
+        <p className="text-sm text-stone-500">Deine Assistentin für Mails, Akten und Finanzen.</p>
+      </div>
       <form onSubmit={anmelden} className="flex flex-col gap-3">
         <input
           type="email"

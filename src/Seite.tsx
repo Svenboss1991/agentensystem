@@ -14,7 +14,11 @@ export function Navigation() {
     href === "#/" ? hash === "#/" || hash === "" : hash.startsWith(href) || (href === "#/adressbuch" && /^#\/(kontakt|firma)\//.test(hash)) ||
         (href === "#/finanzen" && hash.startsWith("#/wertpapier/"));
   return (
-    <nav className="mb-6 flex flex-wrap gap-x-4 gap-y-1 text-sm">
+    <nav className="mb-6 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+      <a href="#/" className="mr-2 flex items-center gap-1.5 font-semibold text-stone-900">
+        <img src="/lupita.svg" alt="" className="h-8 w-8" />
+        Lupita
+      </a>
       {LINKS.map((l) => (
         <a key={l.href} href={l.href} className={aktiv(l.href) ? "font-semibold text-stone-900" : "text-stone-500 hover:text-stone-800"}>
           {l.label}
