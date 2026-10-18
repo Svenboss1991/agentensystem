@@ -56,17 +56,31 @@ export function ortszeit(): { stunde: number; minute: number; wochentag: number 
 
 // ─── Kurse ───────────────────────────────────────────────────────────────────
 
-async function yahoo(ticker: string): Promise<{ kurs: number; vortag: number | null } | null> {
+async function yahoo(ticker: string): Promise<{ kurs: number; vortag: number | null; handelstag: string | null } | null> {
   const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?range=5d&interval=1d`, {
     headers: { "user-agent": "Mozilla/5.0 (Agentensystem)" },
   });
   if (!res.ok) return null;
   const j = (await res.json()) as {
-    chart?: { result?: { meta?: { regularMarketPrice?: number; chartPreviousClose?: number; previousClose?: number } }[] };
+    chart?: {
+      result?: {
+        meta?: { regularMarketPrice?: number; regularMarketTime?: number };
+        timestamp?: number[];
+        indicators?: { quote?: { close?: (number | null)[] }[] };
+      }[];
+    };
   };
-  const meta = j.chart?.result?.[0]?.meta;
+  const r = j.chart?.result?.[0];
+  const meta = r?.meta;
   if (!meta?.regularMarketPrice) return null;
-  return { kurs: meta.regularMarketPrice, vortag: meta.previousClose ?? meta.chartPreviousClose ?? null };
+  // Vortag = Schlusskurs des Handelstags vor dem letzten. (Nicht «chartPreviousClose»: das ist der Kurs
+  // vor Beginn des 5-Tage-Fensters und ergab eine 5-Tage-Veränderung statt einer Tagesbewegung.)
+  const tag = (t: number) => new Intl.DateTimeFormat("en-CA", { timeZone: ZEITZONE }).format(new Date(t * 1000));
+  const handelstag = meta.regularMarketTime ? tag(meta.regularMarketTime) : null;
+  const schluss = (r.timestamp ?? [])
+    .map((t, i) => ({ tag: tag(t), kurs: r.indicators?.quote?.[0]?.close?.[i] ?? null }))
+    .filter((x): x is { tag: string; kurs: number } => x.kurs != null && x.tag !== handelstag);
+  return { kurs: meta.regularMarketPrice, vortag: schluss.at(-1)?.kurs ?? null, handelstag };
 }
 
 /** Basiswerte strukturierter Produkte (z. B. Amazon bei der Booster-Note) nachführen. */
@@ -114,19 +128,37 @@ export async function kurseUndLimits(): Promise<number> {
     }
 
     // Grosse Tagesbewegung
-    if (k.vortag && Math.abs(k.kurs / k.vortag - 1) >= WARNSCHWELLE && w.warnung_am !== heute()) {
+    // Nur warnen, wenn heute gehandelt wurde (am Wochenende nicht die Bewegung vom Freitag nochmals melden).
+    if (k.vortag && k.handelstag === heute() && Math.abs(k.kurs / k.vortag - 1) >= WARNSCHWELLE && w.warnung_am !== heute()) {
       const pct = ((k.kurs / k.vortag - 1) * 100).toFixed(1);
       await db().from("tasks").insert({
         titel: `Starke Bewegung: ${w.emisora} ${Number(pct) > 0 ? "+" : ""}${pct} % heute`,
-        grund: `Kurs ${k.kurs.toFixed(2)} ${w.waehrung}, Vortag ${k.vortag.toFixed(2)}. Im Bericht und in den News nachsehen, ob es einen Grund gibt.`,
+        grund: `Kurs ${k.kurs.toFixed(2)} ${w.waehrung}, Vortag ${k.vortag.toFixed(2)}. ${GRUND_FOLGT}`,
         quelle: "finanz",
         wertpapier_id: w.id,
         faellig_am: heute(),
       });
-      await db().from("wertpapiere").update({ warnung_am: heute() }).eq("id", w.id);
+      // Bericht sofort neu anfordern: die Recherche sucht dann gezielt nach dem Grund der Bewegung.
+      await db().from("wertpapiere").update({ warnung_am: heute(), bericht_am: null }).eq("id", w.id);
     }
   }
   return n;
+}
+
+const GRUND_FOLGT = "Der Agent sucht in den News nach dem Grund; die Erklärung erscheint hier in etwa 10–30 Minuten.";
+
+/** Den gefundenen Grund in die offene Meldung «Starke Bewegung» schreiben. */
+async function bewegungErklaeren(wertpapierId: string, grund: string): Promise<void> {
+  const { data: offen } = await db()
+    .from("tasks")
+    .select("id, grund")
+    .eq("wertpapier_id", wertpapierId)
+    .eq("status", "offen")
+    .like("titel", "Starke Bewegung:%");
+  for (const t of offen ?? []) {
+    const anfang = String(t.grund ?? "").replace(GRUND_FOLGT, "").trim();
+    await db().from("tasks").update({ grund: `${anfang}\n\nGrund laut News: ${grund}` }).eq("id", t.id);
+  }
 }
 
 // ─── Berichte je Wertpapier (Batch mit Websuche) ─────────────────────────────
@@ -154,6 +186,7 @@ export const Bericht = z.object({
   analysten_verkaufen: z.number().nullish(),
   kursziel: z.number().nullish(),
   analysten_zusammenfassung: z.string().nullish(),
+  bewegung_grund: z.string().nullish(),
   news: z.array(z.object({ datum: z.string().nullish(), titel: z.string(), bedeutung: z.string().nullish() })).default([]),
   chancen: z.array(z.string()).default([]),
   risiken: z.array(z.string()).default([]),
@@ -175,10 +208,17 @@ Antworte am Schluss ausschliesslich mit einem JSON-Objekt in einem \`\`\`json-Bl
 name, sektor, beschreibung, kurs, waehrung, kgv, kgv_erwartet, kbv, dividendenrendite, dividende_pro_jahr,
 naechste_dividende_ex (YYYY-MM-DD), naechste_dividende_zahltag (YYYY-MM-DD), naechste_dividende_betrag, marktkapitalisierung (Text),
 hoch_52w, tief_52w, naechste_zahlen (YYYY-MM-DD), analysten_kaufen, analysten_halten, analysten_verkaufen, kursziel,
-analysten_zusammenfassung, news [{datum, titel, bedeutung}], chancen [], risiken [], steuer [], quellen [{titel, url}].`;
+analysten_zusammenfassung, bewegung_grund (nur wenn im Auftrag nach einer Kursbewegung gefragt), news [{datum, titel, bedeutung}], chancen [], risiken [], steuer [], quellen [{titel, url}].`;
 
 let client: Anthropic | undefined;
 const anthropic = () => (client ??= new Anthropic());
+
+/** Starke Bewegung heute (die Warnung ist schon raus): dann gezielt nach dem Grund suchen. */
+function bewegungAuftrag(w: Wertpapier): string {
+  if (w.warnung_am !== heute() || !w.kurs || !w.kurs_vortag) return "";
+  const pct = ((w.kurs / w.kurs_vortag - 1) * 100).toFixed(1);
+  return `\n\nWichtig: Der Kurs hat sich heute um ${Number(pct) > 0 ? "+" : ""}${pct} % bewegt (von ${w.kurs_vortag} auf ${w.kurs} ${w.waehrung}). Suche gezielt in den neuesten News (heute und gestern) nach dem Grund und erkläre ihn in «bewegung_grund» in 2–3 Sätzen, mit Quelle und Datum der Meldung. Findest du keinen konkreten Grund (z. B. nur allgemeine Marktbewegung), schreib genau das; nichts erfinden.`;
+}
 
 function berichtAnfrage(w: Wertpapier): Anthropic.Messages.MessageCreateParamsNonStreaming {
   return {
@@ -194,7 +234,7 @@ function berichtAnfrage(w: Wertpapier): Anthropic.Messages.MessageCreateParamsNo
           (w.produkt as ProduktDaten | null)?.basiswert
             ? `Strukturiertes Produkt ${w.emisora} auf den Basiswert ${(w.produkt as ProduktDaten).basiswert}. Recherchiere den Basiswert (Kennzahlen, Analysten, nächste Quartalszahlen, News); unter «steuer» Hinweise zu strukturierten Produkten/Warrants für in Mexiko Ansässige. Heute ist ${heute()}.`
             : `Wertpapier: ${w.emisora}${w.name ? ` (${w.name})` : ""}, Typ: ${w.typ}, Börse: Bolsa Mexicana de Valores bzw. HSBC México${w.ticker ? `, Ticker ${w.ticker}` : ""}. Heute ist ${heute()}.`,
-        ),
+        ) + bewegungAuftrag(w),
       },
     ],
   } as Anthropic.Messages.MessageCreateParamsNonStreaming;
@@ -243,6 +283,7 @@ export async function berichteBatch(): Promise<string> {
           .from("wertpapiere")
           .update({ bericht, bericht_am: new Date().toISOString(), bericht_fehler: null, ...(bericht.name ? { name: bericht.name } : {}) })
           .eq("id", id);
+        if (bericht.bewegung_grund) await bewegungErklaeren(id, bericht.bewegung_grund);
         ok++;
       } catch (err) {
         await db()
