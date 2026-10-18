@@ -42,6 +42,8 @@ export default function MailsPruefen({ version }: { version: unknown }) {
   const [pruefen, setPruefen] = useState(false);
   const [laeuft, setLaeuft] = useState<string | null>(null);
   const [neu, setNeu] = useState(0);
+  const [gewaehlt, setGewaehlt] = useState<Set<string>>(new Set());
+  const [sichtbar, setSichtbar] = useState(50);
 
   useEffect(() => {
     supabase
@@ -65,6 +67,7 @@ export default function MailsPruefen({ version }: { version: unknown }) {
       .then(({ data }) => setAufgeraeumt((data ?? []).reduce((s, r) => s + (parseInt(r.ergebnis ?? "", 10) || 0), 0)));
   }, [version, neu]);
 
+  const schluessel = (m: Vorlage) => `${m.account_id}|${m.adresse}`;
   // Nach Absender gruppiert, grösste Gruppen zuerst.
   const gruppen = useMemo(() => {
     const g = new Map<string, Vorlage[]>();
@@ -74,18 +77,31 @@ export default function MailsPruefen({ version }: { version: unknown }) {
   // Reihenfolge fürs Durchgehen: Absender für Absender.
   const reihe = useMemo(() => gruppen.flat(), [gruppen]);
 
-  async function gruppeEntscheiden(mails: Vorlage[], urteil: Urteil) {
-    setLaeuft(mails[0].id);
+  async function gruppeEntscheiden(mails: Vorlage[], urteil: Urteil, kennung = mails[0].id) {
+    setLaeuft(kennung);
     try {
       await melden(mails, urteil);
       const weg = new Set(mails.map((m) => m.id));
       setListe((l) => l.filter((m) => !weg.has(m.id)));
       setGesamt((n) => n - mails.length);
+      setGewaehlt((g) => new Set([...g].filter((k) => !mails.some((m) => schluessel(m) === k))));
     } catch (e) {
       window.alert(e instanceof Error ? e.message : String(e));
     }
     setLaeuft(null);
   }
+
+  const angezeigt = gruppen.slice(0, sichtbar);
+  const auswahl = gruppen.filter((g) => gewaehlt.has(schluessel(g[0])));
+  const auswahlMails = auswahl.flat();
+  const alleAngezeigtGewaehlt = angezeigt.length > 0 && angezeigt.every((g) => gewaehlt.has(schluessel(g[0])));
+  const umschalten = (k: string) =>
+    setGewaehlt((g) => {
+      const neu = new Set(g);
+      if (neu.has(k)) neu.delete(k);
+      else neu.add(k);
+      return neu;
+    });
 
   if (!gesamt && !aufgeraeumt) return null;
   return (
@@ -117,10 +133,46 @@ export default function MailsPruefen({ version }: { version: unknown }) {
             </Knopf>
           </div>
           <Karte>
+            {/* Auswahl für Massenlöschung */}
+            <div className="sticky top-0 z-10 -mx-4 -mt-4 mb-2 flex flex-wrap items-center gap-3 rounded-t-lg border-b border-stone-200 bg-white/95 px-4 py-2 backdrop-blur">
+              <label className="flex cursor-pointer items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-stone-900"
+                  checked={alleAngezeigtGewaehlt}
+                  onChange={() =>
+                    setGewaehlt(alleAngezeigtGewaehlt ? new Set() : new Set(angezeigt.map((g) => schluessel(g[0]))))
+                  }
+                />
+                Alle angezeigten auswählen
+              </label>
+              {auswahl.length > 0 && (
+                <>
+                  <span className="text-sm text-stone-500">
+                    {auswahl.length} Absender · {auswahlMails.length.toLocaleString("de-CH")} Mails
+                  </span>
+                  <span className="ml-auto flex gap-2">
+                    <Knopf onClick={() => gruppeEntscheiden(auswahlMails, "muell", "auswahl")} disabled={laeuft === "auswahl"} primaer>
+                      {laeuft === "auswahl" ? "Löscht …" : "Ausgewählte löschen"}
+                    </Knopf>
+                    <Knopf onClick={() => gruppeEntscheiden(auswahlMails, "behalten", "auswahl")} disabled={laeuft === "auswahl"}>
+                      Ausgewählte behalten
+                    </Knopf>
+                  </span>
+                </>
+              )}
+            </div>
             <div className="divide-y divide-stone-100">
-              {gruppen.slice(0, 20).map((g) => (
-                <div key={g[0].id} className="flex flex-wrap items-start gap-2 py-2 first:pt-0 last:pb-0">
-                  <div className="min-w-0 flex-1 text-sm">
+              {angezeigt.map((g) => (
+                <div key={g[0].id} className="flex flex-wrap items-start gap-3 py-2 last:pb-0">
+                  <input
+                    type="checkbox"
+                    className="mt-1 h-4 w-4 shrink-0 cursor-pointer accent-stone-900"
+                    checked={gewaehlt.has(schluessel(g[0]))}
+                    onChange={() => umschalten(schluessel(g[0]))}
+                    aria-label={`${g[0].name || g[0].adresse} auswählen`}
+                  />
+                  <div className="min-w-0 flex-1 cursor-pointer text-sm" onClick={() => umschalten(schluessel(g[0]))}>
                     <span className="font-medium">{g[0].name || g[0].adresse}</span>
                     {g[0].name && <span className="ml-1 text-xs text-stone-400">{g[0].adresse}</span>}
                     <span className="block truncate text-xs text-stone-500">
@@ -144,7 +196,11 @@ export default function MailsPruefen({ version }: { version: unknown }) {
                 </div>
               ))}
             </div>
-            {gruppen.length > 20 && <p className="mt-2 text-xs text-stone-500">… und {gruppen.length - 20} weitere Absender</p>}
+            {gruppen.length > sichtbar && (
+              <button onClick={() => setSichtbar((n) => n + 100)} className="mt-3 text-sm underline">
+                {Math.min(100, gruppen.length - sichtbar)} weitere Absender anzeigen (noch {gruppen.length - sichtbar})
+              </button>
+            )}
             {gesamt > liste.length && (
               <p className="mt-1 text-xs text-stone-400">
                 Angezeigt sind die ersten {liste.length.toLocaleString("de-CH")} von {gesamt.toLocaleString("de-CH")} Mails; der Rest
