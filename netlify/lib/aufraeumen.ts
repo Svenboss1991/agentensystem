@@ -1,5 +1,5 @@
 import type { ImapFlow } from "imapflow";
-import { istZeitproblem, muellBewerten, nachAbsender, type AbsenderGruppe } from "./claude.js";
+import { einzelnBewerten, istZeitproblem, muellBewerten, nachAbsender, type AbsenderGruppe } from "./claude.js";
 import { db, log, type AccountRow } from "./db.js";
 import { gmail } from "./providers/gmail.js";
 import { withImap } from "./providers/imap.js";
@@ -11,6 +11,8 @@ import { graph } from "./providers/outlook.js";
 // nie endgültig. Markierte (Stern/Fahne) und wichtige Mails bleiben unberührt.
 
 export interface StichprobenMail {
+  /** Nur wo der Anbieter einzelne Mails verschieben kann (siehe `einzelnVerschieben`). */
+  id?: string;
   adresse: string;
   name: string | null;
   betreff: string;
@@ -34,6 +36,8 @@ export interface Aufraeumer {
   verschieben(account: AccountRow, kategorie: string, adressen: string[], ende: number): Promise<{ verschoben: number; rest: string[] }>;
   /** Die neuesten Mails eines Absenders in dieser Kategorie, mit ganzem Text (zum Entscheiden). */
   beispiele(account: AccountRow, kategorie: string, adresse: string, max: number): Promise<BeispielMail[]>;
+  /** Einzelne Mails (nach id) in den Papierkorb, z. B. Werbung von Absendern, die sonst behalten werden. */
+  einzelnVerschieben?(account: AccountRow, ids: string[]): Promise<void>;
 }
 
 const vorTagen = (t: number) => new Date(Date.now() - t * 86_400_000);
@@ -43,7 +47,8 @@ export const istWoche = (kategorie: string) => kategorie.endsWith("_woche");
 
 // ─── Gmail ───────────────────────────────────────────────────────────────────
 
-const G_SCHUTZ = "-is:starred -is:important";
+// Nur Mails mit Stern sind geschützt. «Wichtig» setzt Gmail selbst, auch bei viel Werbung; das hielt zu viel Müll zurück.
+const G_SCHUTZ = "-is:starred";
 const G_KAT: Record<string, { titel: string; q: string }> = {
   werbung: { titel: "Werbung (Tab «Werbung»)", q: `category:promotions ${G_SCHUTZ}` },
   allgemein: { titel: "Posteingang «Allgemein»", q: `category:primary ${G_SCHUTZ}` },
@@ -91,6 +96,7 @@ const gmailAufraeumer: Aufraeumer = {
     );
     const ids = (liste.messages ?? []).map((m) => m.id);
     const mails: StichprobenMail[] = [];
+    let n = 0;
     // Kopfzeilen je 10 parallel holen (Gmail erlaubt rund 6000 «Einheiten» pro Minute, eine Abfrage kostet 5).
     for (let i = 0; i < ids.length; i += 10) {
       const teil = await Promise.all(
@@ -102,8 +108,8 @@ const gmailAufraeumer: Aufraeumer = {
         ),
       );
       for (const m of teil) {
-        const h = (n: string) => m.payload?.headers?.find((x) => x.name.toLowerCase() === n)?.value ?? "";
-        mails.push({ ...absenderZerlegen(h("from")), betreff: h("subject") });
+        const h = (name: string) => m.payload?.headers?.find((x) => x.name.toLowerCase() === name)?.value ?? "";
+        mails.push({ id: ids[n++], ...absenderZerlegen(h("from")), betreff: h("subject") });
       }
     }
     return { mails, naechster: liste.nextPageToken ?? null };
@@ -138,6 +144,15 @@ const gmailAufraeumer: Aufraeumer = {
       verschoben += ids.length;
     }
     return { verschoben, rest };
+  },
+
+  async einzelnVerschieben(account, ids) {
+    for (let i = 0; i < ids.length; i += 500) {
+      await gmail(account, "/messages/batchModify", {
+        method: "POST",
+        body: JSON.stringify({ ids: ids.slice(i, i + 500), addLabelIds: ["TRASH"], removeLabelIds: ["INBOX", "SPAM"] }),
+      });
+    }
   },
 };
 
@@ -397,7 +412,7 @@ export async function neueAbsenderBewerten(
   frist: number,
   zusaetzlichBekannt: string[] = [],
   cursor: string | null = null,
-): Promise<{ bewertet: Bewertet[]; weitere: number; naechster: string | null; seitenAbsender: string[]; geprueft: number }> {
+): Promise<{ bewertet: Bewertet[]; weitere: number; naechster: string | null; seitenAbsender: string[]; geprueft: number; mails: StichprobenMail[] }> {
   const a = aufraeumerFuer(account);
   const [{ mails, naechster }, { data: bekannt }] = await Promise.all([
     a.seite(account, kategorie, cursor),
@@ -410,14 +425,14 @@ export async function neueAbsenderBewerten(
   const alle = gruppenAlle.filter((g) => !schonDa.has(g.adresse));
   // Kleine Portionen, damit Claude innerhalb des Zeitlimits einer Netlify-Funktion antwortet.
   const gruppen = alle.slice(0, 15);
-  if (!gruppen.length) return { bewertet: [], weitere: 0, naechster, seitenAbsender, geprueft: mails.length };
+  if (!gruppen.length) return { bewertet: [], weitere: 0, naechster, seitenAbsender, geprueft: mails.length, mails };
 
   let urteile: Awaited<ReturnType<typeof muellBewerten>>;
   try {
     urteile = await muellBewerten(gruppen, a.kategorien[kategorie], frist);
   } catch (err) {
     // Zu wenig Zeit übrig: diese Absender im nächsten Schritt bewerten statt abzubrechen.
-    if (istZeitproblem(err)) return { bewertet: [], weitere: alle.length, naechster, seitenAbsender, geprueft: mails.length };
+    if (istZeitproblem(err)) return { bewertet: [], weitere: alle.length, naechster, seitenAbsender, geprueft: mails.length, mails };
     throw err;
   }
   const bewertet: Bewertet[] = gruppen.map((g) => ({
@@ -441,7 +456,7 @@ export async function neueAbsenderBewerten(
       })),
       { onConflict: "account_id,kategorie,adresse" },
     );
-  return { bewertet, weitere: alle.length - gruppen.length, naechster, seitenAbsender, geprueft: mails.length };
+  return { bewertet, weitere: alle.length - gruppen.length, naechster, seitenAbsender, geprueft: mails.length, mails };
 }
 
 /**
@@ -462,20 +477,48 @@ export async function aufraeumSchritt(
     .maybeSingle();
   const r = await neueAbsenderBewerten(account, kategorie, start + 23_000, [], stand?.cursor ?? null);
 
-  const { data: muell } = r.seitenAbsender.length
+  const { data: urteile } = r.seitenAbsender.length
     ? await db()
         .from("aufraeum_absender")
-        .select("adresse")
+        .select("adresse, urteil, entschieden_von")
         .eq("account_id", account.id)
-        .eq("urteil", "muell")
         .in("adresse", r.seitenAbsender)
     : { data: [] };
-  const muellAdressen = [...new Set((muell ?? []).map((m) => m.adresse as string))];
+  const muellAdressen = [...new Set((urteile ?? []).filter((u) => u.urteil === "muell").map((u) => u.adresse as string))];
   const v = await absenderVerschieben(account, kategorie, muellAdressen, start + 26_000, von);
 
-  // Erst weiterblättern, wenn diese Seite ganz bewertet und aufgeräumt ist.
-  const seiteFertig = r.weitere === 0 && v.rest.length === 0;
-  const kategorieFertig = seiteFertig && r.naechster === null;
+  // Absender, die grundsätzlich behalten werden (Bank, Airline, Shop), schicken oft auch Werbung:
+  // deren Mails auf dieser Seite einzeln prüfen. Was Sven selbst behalten wollte, bleibt unangetastet.
+  const a = aufraeumerFuer(account);
+  let einzeln = 0;
+  let einzelnOffen = false;
+  if (r.weitere === 0 && v.rest.length === 0 && a.einzelnVerschieben) {
+    const behalten = new Set(
+      (urteile ?? []).filter((u) => u.urteil === "behalten" && u.entschieden_von !== "sven").map((u) => u.adresse as string),
+    );
+    const kandidaten = r.mails.filter((m) => m.id && behalten.has(m.adresse.toLowerCase()));
+    if (kandidaten.length && Date.now() > start + 15_000) einzelnOffen = true;
+    else if (kandidaten.length) {
+      try {
+        const muellIdx = await einzelnBewerten(kandidaten, start + 25_000);
+        const ids = kandidaten.filter((_, i) => muellIdx.has(i)).map((m) => m.id!);
+        if (ids.length) {
+          await a.einzelnVerschieben(account, ids);
+          einzeln = ids.length;
+          await log(von, "aufgeraeumt", account.adresse, `${ids.length} Werbemails von sonst wichtigen Absendern in den Papierkorb (${kategorie})`);
+        }
+      } catch (err) {
+        if (!istZeitproblem(err)) throw err;
+        einzelnOffen = true;
+      }
+    }
+  }
+
+  // Erst weiterblättern, wenn diese Seite ganz bewertet und aufgeräumt ist. Wurde etwas weggeräumt, rücken
+  // spätere Mails nach vorne: dann dieselbe Seite nochmals lesen, sonst würden Mails übersprungen.
+  const seiteFertig = r.weitere === 0 && v.rest.length === 0 && !einzelnOffen;
+  const weiter = seiteFertig && v.verschoben + einzeln === 0;
+  const kategorieFertig = weiter && r.naechster === null;
   const jetzt = new Date().toISOString();
   const { error: standFehler } = await db()
     .from("aufraeum_stand")
@@ -484,13 +527,13 @@ export async function aufraeumSchritt(
       kategorie,
       zuletzt: jetzt,
       fehler: null,
-      cursor: seiteFertig ? r.naechster : (stand?.cursor ?? null),
-      gepruefte_mails: kategorieFertig ? 0 : (stand?.gepruefte_mails ?? 0) + (seiteFertig ? r.geprueft : 0),
+      cursor: weiter ? r.naechster : (stand?.cursor ?? null),
+      gepruefte_mails: kategorieFertig ? 0 : (stand?.gepruefte_mails ?? 0) + (weiter ? r.geprueft : 0),
       ...(kategorieFertig ? { durchgang_fertig_am: jetzt } : {}),
     });
   if (standFehler) throw new Error(`Stand speichern: ${standFehler.message}`);
   return {
-    verschoben: v.verschoben,
+    verschoben: v.verschoben + einzeln,
     muell: r.bewertet.filter((b) => b.urteil === "muell").length,
     behalten: r.bewertet.filter((b) => b.urteil === "behalten").length,
     unsicher: r.bewertet.filter((b) => b.urteil === "unsicher").length,
