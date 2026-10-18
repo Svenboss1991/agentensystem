@@ -72,7 +72,7 @@ async function yahoo(ticker: string): Promise<{ kurs: number; vortag: number | n
   };
   const r = j.chart?.result?.[0];
   const meta = r?.meta;
-  if (!meta?.regularMarketPrice) return null;
+  if (!r || !meta?.regularMarketPrice) return null;
   // Vortag = Schlusskurs des Handelstags vor dem letzten. (Nicht «chartPreviousClose»: das ist der Kurs
   // vor Beginn des 5-Tage-Fensters und ergab eine 5-Tage-Veränderung statt einer Tagesbewegung.)
   const tag = (t: number) => new Intl.DateTimeFormat("en-CA", { timeZone: ZEITZONE }).format(new Date(t * 1000));
