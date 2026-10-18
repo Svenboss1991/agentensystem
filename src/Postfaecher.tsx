@@ -102,7 +102,12 @@ export default function Postfaecher({ postfaecher, neuLaden }: { postfaecher: Po
                   <select
                     value={p.aufraeum_strenge ?? "normal"}
                     onChange={async (e) => {
-                      await supabase.from("accounts").update({ aufraeum_strenge: e.target.value }).eq("id", p.id);
+                      const { data, error } = await supabase
+                        .from("accounts")
+                        .update({ aufraeum_strenge: e.target.value })
+                        .eq("id", p.id)
+                        .select("id");
+                      if (error || !data?.length) window.alert(`Strenge nicht gespeichert: ${error?.message ?? "keine Berechtigung"}`);
                       neuLaden();
                     }}
                     className="rounded border border-stone-300 px-1 py-0.5 text-xs text-stone-600"
