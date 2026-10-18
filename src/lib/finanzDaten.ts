@@ -243,7 +243,9 @@ export async function depotLaden(): Promise<Depot> {
 
     const liveAktuell = papier.kurs != null && papier.kurs_am && (!bank || papier.kurs_am.slice(0, 10) >= bank.stand_am);
     const kurs = liveAktuell ? Number(papier.kurs) : bank?.kurs != null ? Number(bank.kurs) : null;
-    const wert = !stueck ? 0 : kurs != null ? kurs * stueck : Number(bank?.wert ?? 0);
+    // Ohne Live-Kurs gilt der Marktwert der Bank («Valor de mercado»): bei Fonds weicht er von Kurs × Stück ab.
+    const bankWert = !liveAktuell && bank?.wert != null && Number(bank.stueck) === stueck ? Number(bank.wert) : null;
+    const wert = !stueck ? 0 : (bankWert ?? (kurs != null ? kurs * stueck : Number(bank?.wert ?? 0)));
     if (!bewegungen.length && !stueck) continue;
 
     const rendite = positionsRendite(bewegungen, wert, stichtag);
